@@ -80,9 +80,10 @@ namespace LaunchCountdownSaver
             return u + (u.Contains("?") ? "&" : "?") + "screensaver=1&secs=" + SecondsPerTab;
         }
 
+        /// <summary>Next launch from the Cape or KSC, asked of Launch Library 2 directly so no server job is involved.</summary>
         public static string NextLaunchUrl()
         {
-            return new Uri(new Uri(Base()), "data/next.json").ToString();
+            return "https://ll.thespacedevs.com/2.3.0/launches/upcoming/?limit=1&mode=list&location__ids=12,27&hide_recent_previous=true&format=json";
         }
     }
 
@@ -170,7 +171,7 @@ namespace LaunchCountdownSaver
 
         private void Poll()
         {
-            if (!fetching && (DateTime.UtcNow - lastFetch).TotalMinutes >= 5) Fetch();
+            if (!fetching && (DateTime.UtcNow - lastFetch).TotalMinutes >= 15) Fetch(); // the API allows 15 requests an hour, shared with the page
             var t = Tick; if (t != null) t();
         }
 
@@ -179,6 +180,7 @@ namespace LaunchCountdownSaver
             fetching = true;
             var client = new WebClient();
             client.Headers[HttpRequestHeader.CacheControl] = "no-cache";
+            client.Headers[HttpRequestHeader.UserAgent] = "LaunchCountdownScreensaver";
             client.DownloadStringCompleted += (o, e) =>
             {
                 fetching = false;
@@ -196,7 +198,7 @@ namespace LaunchCountdownSaver
                 }
                 client.Dispose();
             };
-            try { client.DownloadStringAsync(new Uri(Settings.NextLaunchUrl() + "?t=" + DateTime.UtcNow.Ticks)); }
+            try { client.DownloadStringAsync(new Uri(Settings.NextLaunchUrl())); }
             catch { fetching = false; lastFetch = DateTime.UtcNow; }
         }
     }

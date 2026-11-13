@@ -56,9 +56,16 @@ function refilter(pick) {
 
 async function loadData() {
   try {
-    data = await getJSON('Launch data (Next Spaceflight + Launch Library)', `data/launches.json?t=${Date.now()}`, { keep: false });
+    data = await getJSON('Launch list as of the last site update (Next Spaceflight)', `data/launches.json?t=${Date.now()}`, { keep: false });
   } catch { if (!data) $('stateBanner').textContent = 'COULD NOT LOAD LAUNCH DATA'; return; }
-  all = data.launches.map(prep).filter((l) => l.netMs).map((l) => ({ ...l, ...(details.get(l.id) || {}) }));
+  recompute();
+}
+
+/** Rebuild the launch list from the deployed baseline plus whatever the browser has fetched live. */
+function recompute() {
+  if (!data) return;
+  all = overlay(data.launches.map(prep).filter((l) => l.netMs).map((l) => ({ ...l, ...(details.get(l.id) || {}) })));
+  data.regions = [...new Set([...data.regions, ...all.map((l) => l.region)])];
   const first = !sites || !current;
   sites = (sites || [data.home_region]).filter((r) => data.regions.includes(r));
   if (!sites.length) sites = [data.home_region];
@@ -67,6 +74,68 @@ async function loadData() {
   if (wanted && !sites.includes(wanted.region)) sites.push(wanted.region);
   if (wanted) current = wanted;
   refilter(false);
+}
+
+// ---- live updates, fetched by this browser straight from Launch Library 2
+// Next Spaceflight cannot be read from a web page, so the list that ships with the site is only as
+// fresh as the last deploy. Launch Library allows browsers (15 requests an hour per address), so
+// T-0, window, status and weather odds are refreshed from there every ten minutes.
+const LL2_LIVE = 'https://ll.thespacedevs.com/2.3.0/launches/upcoming/?limit=50&mode=normal&format=json&hide_recent_previous=true';
+const LIVE_KEY = 'launch-countdown:live';
+let live = null; // {at, rows}
+try { live = JSON.parse(localStorage.getItem(LIVE_KEY) || 'null'); } catch { live = null; }
+
+async function loadLive() {
+  if (live && now() - live.at < 9 * 6e4) return; // also keeps a second tab or a reload inside the rate limit
+  try {
+    const d = await getJSON('Launch Library 2 (live, fetched by this browser)', LL2_LIVE, { keep: false });
+    const slim = (r) => ({ id: r.id, name: r.name, mission: r.mission?.name, net: r.net, ws: r.window_start, we: r.window_end, upd: r.last_updated,
+      st: r.status?.abbrev, stName: r.status?.name, prec: r.net_precision?.abbrev, prob: r.probability, img: r.image?.image_url,
+      lsp: r.launch_service_provider?.name, rocket: r.rocket?.configuration?.full_name || r.rocket?.configuration?.name,
+      pad: r.pad?.name, loc: r.pad?.location?.name, lat: +r.pad?.latitude, lon: +r.pad?.longitude, country: r.pad?.country?.name, tz: r.pad?.location?.timezone_name });
+    live = { at: now(), rows: d.results.map(slim) };
+    try { localStorage.setItem(LIVE_KEY, JSON.stringify(live)); } catch { /* storage unavailable */ }
+    recompute();
+  } catch { /* keep the last answer; the feed list shows the failure */ }
+}
+
+const STATES = { FL: 'Florida', CA: 'California', TX: 'Texas', VA: 'Virginia', AK: 'Alaska', NM: 'New Mexico', Virginia: 'Virginia' };
+function liveRegion(r) {
+  const m = /,\s*([A-Za-z ]+),\s*USA$/.exec(r.loc || '');
+  if (m) return `${STATES[m[1]] || m[1]}, USA`;
+  return ({ 'United States of America': 'USA', 'Russian Federation': 'Russia' })[r.country] || r.country || 'Unknown';
+}
+const padKey = (n) => (/(\d+[A-Z]?)\s*$/.exec((n || '').toUpperCase().replace('STARSHIP PAD', '').trim()) || [null, (n || '').toUpperCase()])[1];
+const words = (t) => new Set((t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter((w) => w.length > 1));
+function alike(a, b) { const A = words(a), B = words(b); let n = 0; A.forEach((w) => { if (B.has(w)) n++; }); return A.size && B.size ? n / Math.min(A.size, B.size) : 0; }
+const STATUS_COLOR = { Go: '#7ED47E', TBC: '#0076C9', TBD: '#0076C9', Hold: '#fab219', 'In Flight': '#3987e5', Success: '#0ca30c', Failure: '#d03b3b' };
+
+/** Lay the live rows over the deployed list: newer facts win, and launches the list does not know are added. */
+function overlay(list) {
+  if (!live) return list;
+  const baseAt = parseT(data.generated_at) || 0, used = new Set(), out = [...list];
+  for (const r of live.rows) {
+    const region = liveRegion(r), name = r.mission || (r.name || '').split('|').pop().trim(), t = parseT(r.net);
+    let best = -1, score = 0;
+    out.forEach((l, i) => {
+      if (l.past || used.has(i) || l.region !== region) return;
+      const sim = alike(name, l.name), samePad = padKey(r.pad) === padKey(l.pad.name), near = Math.abs((l.netMs || 0) - t) < 2 * 36e5;
+      const sc = sim + (samePad ? 0.3 : 0) + (near ? 0.5 : 0);
+      if ((sim >= 0.6 || (samePad && near)) && sc > score) { best = i; score = sc; }
+    });
+    const tbd = r.st === 'TBD', fresh = { net: r.net, window_open: r.ws, window_close: r.we, time_tbd: tbd, time_precise: r.prec === 'MIN' || r.prec === 'SEC',
+      status: { name: r.stName, color: STATUS_COLOR[r.st] }, weather_go_pct: r.prob, liveAt: live.at };
+    if (best >= 0) {
+      used.add(best);
+      // only take the live values when they were edited after the deployed list was built
+      if ((parseT(r.upd) || 0) > baseAt) out[best] = prep({ ...out[best], ...fresh, weather_go_pct: r.prob ?? out[best].weather_go_pct });
+      else out[best] = { ...out[best], liveAt: live.at };
+    } else if (t && !Number.isNaN(r.lat)) {
+      out.push(prep({ id: `ll2-${r.id}`, name, past: false, provider: r.lsp, rocket: r.rocket, image: r.img, region, heading: null, nsf_url: null,
+        pad: { name: r.pad, location: r.loc, lat: r.lat, lon: r.lon, timezone: r.tz }, ...fresh }));
+    }
+  }
+  return out.sort((a, b) => (a.past - b.past) || (a.netMs - b.netMs));
 }
 
 /** The full source records for one launch live in their own file; fetch on selection and once a minute after. */
@@ -262,7 +331,7 @@ function renderFacts() {
   if (l.weather_go_pct != null) out.push(fact('Weather', `${l.weather_go_pct}% GO`, l.ll2?.weather_concerns || 'published probability'));
   out.push(fact('Pad', l.pad.name || '—', l.pad.location), fact('Vehicle', l.rocket || '—', l.provider));
   if (l.heading != null && l.pad.lat != null) out.push(fact('Launch azimuth', `${l.heading}°`, `≈ ${inclination(l.pad.lat, l.heading).toFixed(1)}° inclination`));
-  out.push(fact('Launch data', ago(parseT(data.generated_at), t), (data.sources || []).join(' + ') + (data.stale ? ' (stale)' : '')));
+  out.push(fact('Launch data', l.liveAt ? `live ${ago(live.at, t)}` : `list ${ago(parseT(data.generated_at), t)}`, l.liveAt ? `Launch Library 2, checked from this browser · full list as of ${ago(parseT(data.generated_at), t)}` : 'not yet confirmed live; from the last site update'));
   $('heroFacts').replaceChildren(...out);
   renderTimeline();
 }
@@ -540,9 +609,10 @@ setInterval(() => {
   $('utcClock').textContent = `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
   if (cd) { renderFacts(); checkTerminal(); }
 }, 1000);
-setInterval(loadData, 60_000);
+setInterval(loadData, 5 * 60_000);
+setInterval(loadLive, 60_000); // asks at most once every nine minutes; see loadLive
 setInterval(renderSchedule, 30_000);
 setInterval(checkVersion, 60_000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadData(); checkVersion(); } });
-loadData().then(syncClock);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadData(); loadLive(); checkVersion(); } });
+loadData().then(() => { syncClock(); loadLive(); });
 checkVersion();

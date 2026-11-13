@@ -53,9 +53,15 @@ It does not keep the display awake: there is no video playback and no power requ
 
 ## How the data gets there
 
-Next Spaceflight does not allow cross-origin requests, so a GitHub Actions workflow (`.github/workflows/pages.yml`) runs `scripts/fetch_launches.py` about every ten minutes and deploys the site. Florida and any site with a launch in the next three days are re-read on every run; every other site is re-read about once an hour. It writes `data/launches.json` (a light index of every launch), `data/launch/<id>.json` (the full records for one launch, loaded when selected), `data/cache.json` (carried between runs) and `data/next.json` (for the screensaver). The page re-reads that file every minute. All weather feeds are fetched live by the browser.
+Updates happen in each viewer's browser, not on a server schedule.
 
-GitHub Pages must be set to **Source: GitHub Actions** (Settings → Pages). GitHub pauses scheduled workflows after 60 days without repository activity; re-enable it from the Actions tab if that happens.
+- **Live, from the browser:** launch time, window, status and weather odds come from Launch Library 2 every ten minutes (it allows 15 requests an hour per address). All weather, the 2D radar and the 3D radar volume are also fetched directly by the browser.
+- **As of the last site update:** Next Spaceflight does not allow requests from web pages, so `scripts/fetch_launches.py` reads it only when the site is deployed (on a push to `main`, or by running the workflow by hand). That snapshot supplies the full launch list and the Next Spaceflight-only details: launch azimuth, countdown timeline, recovery, statistics. When Launch Library has a newer edit for a launch, its time and status win; launches the snapshot does not know are added.
+- **Not live:** aircraft, vessels and hazard areas (`scripts/fetch_traffic.py`) cannot be read from a browser either, so they are also only as fresh as the last deploy. Aircraft older than twenty minutes are not drawn. Making these live needs a relay, or the screensaver fetching them itself.
+
+The deploy writes `data/launches.json` (a light index), `data/launch/<id>.json` (full records for one launch), `data/cache.json` (carried between runs), `data/next.json`, `data/traffic.json` and `data/hazards.json`.
+
+GitHub Pages must be set to **Source: GitHub Actions** (Settings → Pages).
 
 ## Run locally
 

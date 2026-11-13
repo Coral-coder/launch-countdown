@@ -1,10 +1,9 @@
-name: Update launch data and deploy
+# Runs only when the site changes (or by hand). Live updates happen in each viewer's browser.
+name: Build and deploy
 
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: "*/10 * * * *"   # GitHub runs scheduled jobs on a best-effort basis; expect 10-20 minute spacing
   workflow_dispatch:
 
 permissions:
