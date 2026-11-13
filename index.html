@@ -11,8 +11,8 @@
 </script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Florida Launch Countdown</title>
-<meta name="description" content="Millisecond countdown to the next Florida launch with live radar, trajectory, soundings and range weather.">
+<title>Launch Countdown</title>
+<meta name="description" content="Millisecond countdown to the next launch from the sites you choose, with live radar, trajectory, soundings and range weather.">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="assets/style.css">
 </head>
@@ -20,7 +20,8 @@
 
 <div class="marking" aria-hidden="true">UNCLASSIFIED // PUBLIC SOURCES // NOT AN OFFICIAL PRODUCT</div>
 <header class="topbar">
-  <div class="brand">FLORIDA LAUNCH <b>COUNTDOWN</b></div>
+  <div class="brand">LAUNCH <b>COUNTDOWN</b></div>
+  <details id="sitePick" class="menu"><summary title="Choose which launch sites to follow">Sites</summary><div id="siteList" class="show-tabs"></div></details>
   <select id="launchSelect" aria-label="Select launch"></select>
   <div id="statusPill" class="pill" role="status">LOADING</div>
   <div class="controls">
@@ -131,7 +132,7 @@
 </section>
 
 <section class="panel card" data-tab="lcc" data-label="Commit Criteria">
-  <h2>Launch Commit Criteria Watch <span class="muted">unofficial screening from public data — the 45th Weather Squadron makes the real call</span></h2>
+  <h2>Launch Commit Criteria Watch <span class="muted" id="lccNote">unofficial screening from public data</span></h2>
   <div id="lcc" class="lcc"></div>
 </section>
 
@@ -159,7 +160,7 @@
   <article class="card">
     <h2>Alerts &amp; Forecast Discussion</h2>
     <div id="alerts"></div>
-    <details open><summary>NWS Melbourne Area Forecast Discussion <span id="afdStamp" class="muted"></span></summary><pre id="afd" class="pre"></pre></details>
+    <details open><summary>NWS Area Forecast Discussion <span id="afdOffice"></span> <span id="afdStamp" class="muted"></span></summary><pre id="afd" class="pre"></pre></details>
   </article>
 </section>
 
@@ -181,7 +182,7 @@
 
 <section class="panel grid three" data-tab="sea" data-label="Sea &amp; Space">
   <article class="card"><h2>Sea State <span class="muted" id="seaWhere"></span></h2><div id="sea" class="stats compact"></div></article>
-  <article class="card"><h2>Port Canaveral Tide Station</h2><div id="tide" class="stats compact"></div></article>
+  <article class="card"><h2>Tide Station <span class="muted" id="tideName"></span></h2><div id="tide" class="stats compact"></div></article>
   <article class="card"><h2>Space Weather <span class="muted">NOAA SWPC</span></h2><div id="space" class="stats compact"></div></article>
 </section>
 
@@ -202,7 +203,7 @@
 </section>
 
 <section class="panel card" data-tab="schedule" data-label="Schedule">
-  <h2>Florida Launch Schedule <span class="muted" id="dataStamp"></span></h2>
+  <h2>Launch Schedule <span class="muted" id="dataStamp"></span></h2>
   <div class="scroll"><table id="schedule" class="tbl"></table></div>
 </section>
 
@@ -211,7 +212,7 @@
   <div id="feeds" class="feeds"></div>
   <div id="raw"></div>
   <p class="note">Launch data: <a href="https://nextspaceflight.com/launches/" target="_blank" rel="noopener">Next Spaceflight</a>, enriched with
-  <a href="https://thespacedevs.com/llapi" target="_blank" rel="noopener">Launch Library 2</a>. Weather: NWS, NOAA NEXRAD (KMLB), Iowa Environmental Mesonet,
+  <a href="https://thespacedevs.com/llapi" target="_blank" rel="noopener">Launch Library 2</a>. Weather: NWS, NOAA NEXRAD, Iowa Environmental Mesonet,
   Open-Meteo, NOAA CO-OPS, NOAA SWPC, NASA GIBS, RainViewer. Not an official source — never use for safety decisions.</p>
   <p class="note">Windows screensaver: <a href="https://github.com/Coral-coder/launch-countdown/releases/tag/screensaver" target="_blank" rel="noopener">download the latest build</a>.</p>
 </section>

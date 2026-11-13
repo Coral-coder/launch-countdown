@@ -1,8 +1,20 @@
-# Florida Launch Countdown
+# Launch Countdown
 
-A static GitHub Pages site that counts down to the next launch from Cape Canaveral / Kennedy Space Center with millisecond precision, and puts the weather and range picture for that launch on one page.
+A static GitHub Pages site that counts down, with millisecond precision, to the next launch from the sites you choose (Florida by default), and puts the weather and range picture for that launch on one page.
 
 ## What is on the page
+
+**Sites**: the Sites menu chooses which launch regions to follow (US states, otherwise countries); the choice is saved per browser, and `?sites=Florida, USA|Texas, USA` in the address sets it directly. Everything follows the selected launch's pad. What is available depends on where it is:
+
+| | Florida, California, Texas, Virginia, New Mexico | Other US sites | Outside the US |
+|---|---|---|---|
+| Model forecast, soundings, clouds, wind field, sea state, space weather, 3D corridor and telemetry | yes | yes | yes |
+| NWS observations, forecast, alerts, forecast discussion | yes | yes | no |
+| Site NEXRAD radar on the map and in 3D | yes | national composite only | worldwide mosaic on the map, none in 3D |
+| Observed balloon soundings | yes | Alaska only | no |
+| Tide gauge | Florida, California, Texas, Virginia | no | no |
+
+Per-site details live in `assets/js/sites.js`.
 
 Each section is its own tab; nothing scrolls as one long page. **Slideshow** (`P`) cycles through the tabs on a timer you set in seconds, and the **Tabs** menu picks which ones it visits. Arrow keys step between tabs. The site reloads itself when a new version is deployed and re-reads launch data every minute; an entered T-0 survives both unless the source publishes a new one.
 
@@ -36,7 +48,7 @@ It does not keep the display awake: there is no video playback and no power requ
 
 ## How the data gets there
 
-Next Spaceflight does not allow cross-origin requests, so a GitHub Actions workflow (`.github/workflows/pages.yml`) runs `scripts/fetch_launches.py` about every ten minutes, writes `data/launches.json`, and deploys the site. The page re-reads that file every minute. All weather feeds are fetched live by the browser.
+Next Spaceflight does not allow cross-origin requests, so a GitHub Actions workflow (`.github/workflows/pages.yml`) runs `scripts/fetch_launches.py` about every ten minutes and deploys the site. Florida and any site with a launch in the next three days are re-read on every run; every other site is re-read about once an hour. It writes `data/launches.json` (a light index of every launch), `data/launch/<id>.json` (the full records for one launch, loaded when selected), `data/cache.json` (carried between runs) and `data/next.json` (for the screensaver). The page re-reads that file every minute. All weather feeds are fetched live by the browser.
 
 GitHub Pages must be set to **Source: GitHub Actions** (Settings → Pages). GitHub pauses scheduled workflows after 60 days without repository activity; re-enable it from the Actions tab if that happens.
 

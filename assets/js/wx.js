@@ -4,6 +4,7 @@
 import { $, h, num, getJSON, compass, cToF, kmhToKt, msToKt, utc, hhmmZ, dayHourZ, ago, destination, sunElevation, esc } from './util.js';
 import { lineChart, skewT, hodograph, soundingStats, soundingTable, refreshTheme } from './charts.js';
 import { now } from './clock.js';
+import { siteFor, inUS } from './sites.js';
 
 const OM = 'https://api.open-meteo.com/v1/forecast';
 const NWS = 'https://api.weather.gov';
@@ -11,8 +12,8 @@ const IEM = 'https://mesonet.agron.iastate.edu';
 const COOPS = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter';
 const SWPC = 'https://services.swpc.noaa.gov';
 
-const STATIONS = [['KXMR', 'Cape Canaveral Skid Strip'], ['KTTS', 'KSC Shuttle Landing Facility'], ['KCOF', 'Patrick SFB'], ['KTIX', 'Titusville'], ['KMLB', 'Melbourne']];
-const RAOBS = [['KTBW', 'Tampa Bay'], ['KJAX', 'Jacksonville'], ['KMFL', 'Miami']];
+// Per-site reference stations, set whenever the target moves to a different launch site.
+let STATIONS = [], RAOBS = [], site = {};
 const LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30];
 export const WIND_LEVELS = [['10m', 'Surface (10 m)'], ['80m', '80 m'], ['180m', '180 m'], ['925hPa', '925 hPa · 2,500 ft'], ['850hPa', '850 hPa · 5,000 ft'],
   ['700hPa', '700 hPa · 10,000 ft'], ['500hPa', '500 hPa · 18,000 ft'], ['300hPa', '300 hPa · 30,000 ft'], ['250hPa', '250 hPa · 34,000 ft'], ['200hPa', '200 hPa · 39,000 ft']];
@@ -53,7 +54,16 @@ export function setTarget(target) {
   const moved = !wx.target || wx.target.lat !== target.lat || wx.target.lon !== target.lon;
   const retimed = !wx.target || wx.target.t0 !== target.t0;
   wx.target = target;
-  if (moved) { loadForecast(); loadObs(); loadNws(); loadSea(); } else { renderForecast(); }
+  if (moved) {
+    // A different pad: drop everything tied to the old one, then reload for the new site.
+    site = siteFor(target.region);
+    STATIONS = site.stations || []; RAOBS = site.raobs || [];
+    Object.assign(wx, { obs: {}, alerts: null, nws: null, sea: null, tide: {}, office: null });
+    for (const k of Object.keys(wx.profiles)) delete wx.profiles[k];
+    sourceOptions();
+    $('lccNote').textContent = `unofficial screening from public data — ${site.forecaster || 'the range weather officer'} makes the real call`;
+    loadForecast(); loadNws(); loadSea(); loadTide(); loadRaobs();
+  } else { renderForecast(); }
   if (moved || retimed) loadProfiles();
   renderLcc();
 }
@@ -61,21 +71,23 @@ export function setTarget(target) {
 /** Redraw everything painted on canvas after a theme change. */
 export function redraw() { refreshTheme(); renderCharts(); renderSounding(); }
 
-export function start() {
-  const src = $('sndSource');
-  src.append(h('option', { value: 't0' }, 'Model profile over the pad — at T-0'), h('option', { value: 'now' }, 'Model profile over the pad — now'),
+function sourceOptions() {
+  $('sndSource').replaceChildren(h('option', { value: 't0' }, 'Model profile over the pad — at T-0'), h('option', { value: 'now' }, 'Model profile over the pad — now'),
     ...RAOBS.map(([id, name]) => h('option', { value: id }, `Observed balloon — ${name} (${id})`)));
-  src.addEventListener('change', renderSounding);
+}
+
+export function start() {
+  $('sndSource').addEventListener('change', renderSounding);
   $('chartRange').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     chartHours = b.dataset.h === 't0' ? 't0' : +b.dataset.h;
     [...$('chartRange').children].forEach((x) => x.classList.toggle('on', x === b));
     renderCharts();
   });
-  loadTide(); loadSpace(); loadRaobs(); loadAfd();
+  loadSpace();
   const every = (min, fn) => setInterval(() => wx.target && fn(), min * 6e4);
   every(15, loadForecast); every(2, loadObs); every(5, loadNws); every(15, loadSea); every(30, loadProfiles);
-  setInterval(loadTide, 6 * 6e4); setInterval(loadSpace, 5 * 6e4); setInterval(loadRaobs, 30 * 6e4); setInterval(loadAfd, 30 * 6e4);
+  every(6, loadTide); setInterval(loadSpace, 5 * 6e4); every(30, loadRaobs); every(30, loadAfd);
 }
 
 /** Is T-0 firm and inside what the model covers? */
@@ -213,7 +225,7 @@ function renderSounding() {
   const p = wx.profiles[key];
   if (!p) { $('sndStamp').textContent = 'Not available yet.'; return; }
   $('sndStamp').textContent = `${p.label} · valid ${utc(p.valid)}` + (key !== sel.value ? ' (T-0 not in model range — showing now)' : '') +
-    (RAOBS.some((r) => r[0] === key) ? ' · the Cape\'s own range balloons are not published' : '');
+    (RAOBS.some((r) => r[0] === key) && site.raobNote ? ` · ${site.raobNote}` : '');
   skewT($('skewt'), p.levels, `${p.label} · ${dayHourZ(p.valid)}`);
   hodograph($('hodo'), p.levels);
   soundingTable($('sndTable'), p.levels);
@@ -234,6 +246,7 @@ async function loadObs() {
   }));
   const v = (o) => o?.value;
   const tbl = $('obsTable');
+  if (!STATIONS.length) { tbl.replaceChildren(h('tr', {}, h('td', { class: 'muted wrap' }, inUS(wx.target.region) ? 'Looking up nearby NWS stations…' : 'Station observations come from the US National Weather Service and are not available for this launch site. The model analysis above covers current conditions.'))); return; }
   tbl.replaceChildren(h('tr', {}, ['Station', 'Observed', 'Sky', 'Temp °F', 'Dew pt °F', 'RH %', 'Wind', 'Gust kt', 'Vis mi', 'Pressure inHg', 'Cloud layers', 'METAR'].map((t) => h('th', {}, t))));
   for (const [id, name] of STATIONS) {
     const o = wx.obs[id];
@@ -252,6 +265,14 @@ async function loadObs() {
 
 async function loadNws() {
   const { lat, lon } = wx.target, pt = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+  if (!inUS(wx.target.region)) {
+    const note = (t) => h('div', { class: 'note' }, t);
+    $('alerts').replaceChildren(note('Alerts come from the US National Weather Service and are not available for this launch site.'));
+    $('nwsForecast').replaceChildren(note('The NWS text forecast only covers the United States. See the Pad Weather and Hourly Charts tabs for the model forecast at this site.'));
+    $('afd').textContent = ''; $('afdStamp').textContent = 'not available outside the US';
+    loadObs(); renderLcc();
+    return;
+  }
   getJSON('NWS alerts', `${NWS}/alerts/active?point=${pt}`).then((d) => {
     wx.alerts = d.features.map((f) => f.properties);
     $('alerts').replaceChildren(...(wx.alerts.length ? wx.alerts.map((a) => h('div', { class: 'alert' + (/Extreme|Severe/.test(a.severity) ? ' sev' : '') },
@@ -262,6 +283,15 @@ async function loadNws() {
   }).catch(() => {});
   try {
     const p = await getJSON('NWS gridpoint', `${NWS}/points/${pt}`);
+    wx.office = p.properties.cwa;
+    if (!site.stations) {
+      // no hand-picked stations for this site: take the nearest airports the NWS lists for the grid point
+      try {
+        const st = await getJSON('NWS nearby stations', p.properties.observationStations, { keep: false });
+        STATIONS = st.features.map((f) => [f.properties.stationIdentifier, f.properties.name]).filter(([id]) => /^[KP][A-Z]{3}$/.test(id)).slice(0, 5);
+      } catch { /* table explains */ }
+    }
+    loadObs(); loadAfd();
     const f = await getJSON('NWS forecast', p.properties.forecast);
     wx.nws = f.properties.periods;
     $('nwsForecast').replaceChildren(...wx.nws.map((x) => h('div', { class: 'period' }, h('b', {}, `${x.name} · ${x.temperature}°${x.temperatureUnit} · ${x.windSpeed} ${x.windDirection}`), h('span', {}, x.detailedForecast))));
@@ -270,7 +300,9 @@ async function loadNws() {
 
 async function loadAfd() {
   try {
-    const list = await getJSON('NWS forecast discussion list', `${NWS}/products/types/AFD/locations/MLB`, { keep: false });
+    if (!wx.office) return;
+    $('afdOffice').textContent = wx.office;
+    const list = await getJSON('NWS forecast discussion list', `${NWS}/products/types/AFD/locations/${wx.office}`, { keep: false });
     const p = await getJSON('NWS forecast discussion', `${NWS}/products/${list['@graph'][0].id}`);
     $('afd').textContent = p.productText.trim();
     $('afdStamp').textContent = `issued ${utc(Date.parse(p.issuanceTime))}`;
@@ -300,7 +332,10 @@ async function loadSea() {
 }
 
 async function loadTide() {
-  const base = `${COOPS}?station=8721604&units=english&time_zone=gmt&format=json`;
+  wx.tide = {};
+  if (!site.tide) { $('tideName').textContent = ''; $('tide').replaceChildren(h('div', { class: 'note' }, 'No NOAA tide gauge is set up for this launch site.')); return; }
+  $('tideName').textContent = site.tide[1];
+  const base = `${COOPS}?station=${site.tide[0]}&units=english&time_zone=gmt&format=json`;
   const one = async (product, extra = 'date=latest') => {
     try { const d = await getJSON(`NOAA tide station: ${product}`, `${base}&product=${product}&${extra}`); wx.tide[product] = d.data || d.predictions; } catch { /* station sensor may be offline */ }
   };
@@ -343,7 +378,7 @@ const gridCache = new Map();
 export async function windGrid(level, when, bounds) {
   const { t0, tbd } = wx.target || {};
   const ms = when === 't0' && !tbd && t0 > now() && t0 < now() + 15 * 864e5 ? t0 : now();
-  const hr = isoHour(ms), key = `${level}|${hr}`;
+  const hr = isoHour(ms), key = `${level}|${hr}|${bounds.s},${bounds.w}`;
   if (gridCache.has(key)) return gridCache.get(key);
   const N = 8, lats = [], lons = [];
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {

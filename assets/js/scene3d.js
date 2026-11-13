@@ -7,6 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { $, h, destination, getJSON, utc, num, compass } from './util.js';
 import { wx, onWx } from './wx.js';
 import { now } from './clock.js';
+import { siteFor } from './sites.js';
 
 const R = 6371, rad = (d) => d * Math.PI / 180;
 const TRACK = 0xfab219, WIND = 0x7fb2f5;
@@ -274,7 +275,7 @@ function buildRadar(g) {
   // the radar site itself, relative to the pad
   const [rx, rz] = proj(radar.site.lat, radar.site.lon);
   const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 12), new THREE.MeshBasicMaterial({ color: 0x7fe0a0 })); dot.position.set(rx, 0.3, rz); dot.userData.fixed = 0.006; g.add(dot);
-  g.add(label('KMLB radar', new THREE.Vector3(rx + 2, 0.5, rz), { color: '#9be8b5', size: 10 }));
+  g.add(label(`${radar.id} radar`, new THREE.Vector3(rx + 2, 0.5, rz), { color: '#9be8b5', size: 10 }));
   const tex = new THREE.Data3DTexture(radar.data, radar.n, radar.n, radar.nz);
   tex.format = THREE.RedFormat; tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.unpackAlignment = 1; tex.needsUpdate = true;
   const h3 = VOL.top * ex;
@@ -291,11 +292,13 @@ function buildRadar(g) {
 /** Find the newest KMLB volume in the public archive and hand it to the decoder if it is new. */
 async function loadRadar() {
   if (!launch || launch.pad.lat == null || radarBusy || !$('v3Radar').checked) return;
+  const id = siteFor(launch.region).radar;
+  if (!id) { if (radar) { radar = null; radarKey = ''; rebuild(); } radarNote = 'no NEXRAD radar covers this launch site'; return; }
   radarBusy = true;
   try {
     let key = null;
     for (const back of [0, 1]) { // around 00Z the newest volume is still under yesterday's prefix
-      const d = new Date(now() - back * 864e5), prefix = `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/KMLB/`;
+      const d = new Date(now() - back * 864e5), prefix = `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${id}/`;
       const xml = await (await fetch(`${BUCKET}/?list-type=2&prefix=${prefix}`, { cache: 'no-store' })).text();
       const keys = [...xml.matchAll(/<Key>([^<]+)<\/Key>/g)].map((m) => m[1]).filter((k) => !k.endsWith('_MDM'));
       if (keys.length) { key = keys[keys.length - 1]; break; }
@@ -308,7 +311,7 @@ async function loadRadar() {
     worker.onmessage = (e) => {
       radarBusy = false;
       if (!e.data.ok) { radarNote = `radar volume unavailable: ${e.data.error}`; return; }
-      radarKey = e.data.id; radar = e.data.vol; radarNote = '';
+      radarKey = e.data.id; radar = { ...e.data.vol, id: e.data.id.slice(e.data.id.lastIndexOf('/') + 1, e.data.id.lastIndexOf('/') + 5) }; radarNote = '';
       rebuild();
     };
     worker.onerror = (e) => { radarBusy = false; radarNote = `radar decoder failed: ${e.message}`; };
@@ -521,7 +524,7 @@ export function init(getT) {
   $('v3Clouds').addEventListener('change', (e) => { if (cloudMesh) cloudMesh.visible = e.target.checked; });
   $('v3MinDbz').addEventListener('input', (e) => { $('v3MinOut').textContent = e.target.value; if (radarMesh) radarMesh.material.uniforms.minDbz.value = +e.target.value; });
   $('v3RadOp').addEventListener('input', (e) => { if (radarMesh) radarMesh.material.uniforms.opacity.value = +e.target.value; });
-  const bar = h('span', { class: 'dbz' }, 'Radar dBZ 5', h('b', { style: `background:linear-gradient(90deg,${DBZ_COLORS.map((c, i) => `${c} ${i / 15 * 100}% ${(i + 1) / 15 * 100}%`).join(',')})` }), '75 · KMLB Level II, all tilts, resampled to a 1.6 km × 0.4 km grid');
+  const bar = h('span', { class: 'dbz' }, 'Radar dBZ 5', h('b', { style: `background:linear-gradient(90deg,${DBZ_COLORS.map((c, i) => `${c} ${i / 15 * 100}% ${(i + 1) / 15 * 100}%`).join(',')})` }), '75 · NEXRAD Level II, all tilts, resampled to a 1.6 km × 0.4 km grid');
   $('v3Legend').replaceChildren(bar,
     h('span', {}, h('i', { style: 'background:#fab219' }), 'Modelled ascent corridor: generic two-stage profile flown along the published azimuth, not provider trajectory data'),
     h('span', {}, h('i', { style: 'background:#f0efec' }), 'Clouds: forecast-model cloud fraction on 14 pressure levels, ray-marched; fine texture is synthetic'),

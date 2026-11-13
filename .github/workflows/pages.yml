@@ -30,7 +30,7 @@ jobs:
         # On total failure the committed data/launches.json is deployed unchanged.
         run: |
           python3 scripts/fetch_launches.py \
-            --previous "${{ steps.pages.outputs.base_url }}/data/launches.json" \
+            --previous "${{ steps.pages.outputs.base_url }}/data/cache.json" \
             --out data/launches.json || echo "::warning::launch data refresh failed; deploying the committed copy"
       - name: Stamp the build
         run: echo "{\"sha\":\"$GITHUB_SHA\"}" > version.json

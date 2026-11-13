@@ -1,7 +1,7 @@
 // Page controller: loads the launch list, drives the clock and its HOLD / SCRUB controls,
 // and fills in the mission panels. Weather lives in wx.js, the map in map.js.
 
-import { $, h, esc, num, pad2, parts, dur, utc, eastern, local, ago, parseT, getJSON, feeds, onFeeds, inclination } from './util.js';
+import { $, h, esc, num, pad2, parts, dur, utc, zoned, local, ago, parseT, getJSON, feeds, onFeeds, inclination } from './util.js';
 import { Countdown, now, syncClock, clockOffset, label } from './clock.js';
 import * as weather from './wx.js';
 import { initMap, showLaunch, mapShown } from './map.js';
@@ -14,34 +14,88 @@ const prep = (l) => ({ ...l, netMs: parseT(l.net), openMs: parseT(l.window_open)
 /** No usable T-0: the listing has only a placeholder date and the operator has not entered a time. */
 const noT0 = () => current.time_tbd && cd?.s.t0 == null;
 
+// ---- which launch sites to follow (saved per browser; ?sites=Florida, USA|Texas, USA overrides)
+const SITES_KEY = 'launch-countdown:sites';
+let all = [], sites = null;
+const details = new Map(); // launch id -> {at, nsf, ll2}
+try {
+  const q = new URLSearchParams(location.search).get('sites');
+  sites = q ? q.split('|') : JSON.parse(localStorage.getItem(SITES_KEY) || 'null');
+} catch { sites = null; }
+
+function renderSites() {
+  const counts = {};
+  for (const l of all) if (!l.past) counts[l.region] = (counts[l.region] || 0) + 1;
+  const box = (label, checked, onchange) => { const i = h('input', { type: 'checkbox' }); i.checked = checked; i.addEventListener('change', () => onchange(i.checked)); return h('label', {}, i, label); };
+  const apply = (next) => {
+    sites = next.length ? next : [data.home_region];
+    try { localStorage.setItem(SITES_KEY, JSON.stringify(sites)); } catch { /* storage unavailable */ }
+    refilter(true);
+  };
+  $('siteList').replaceChildren(
+    box('All sites', data.regions.every((r) => sites.includes(r)), (on) => apply(on ? [...data.regions] : [data.home_region])),
+    h('b', {}, 'Upcoming launches'),
+    ...data.regions.map((r) => box(`${r} · ${counts[r] || 0}`, sites.includes(r), (on) => apply(on ? [...sites, r] : sites.filter((x) => x !== r)))));
+  $('sitePick').querySelector('summary').textContent = sites.length === data.regions.length ? 'Sites: all' : sites.length === 1 ? `Site: ${sites[0].replace(', USA', '')}` : `Sites: ${sites.length}`;
+}
+
+/** Rebuild the working list from the chosen sites and make sure a launch from it is selected. */
+function refilter(pick) {
+  launches = all.filter((l) => sites.includes(l.region));
+  const sel = $('launchSelect');
+  const opt = (l) => h('option', { value: l.id }, `${l.time_tbd ? 'NET ' + l.net.slice(0, 7) : l.net.slice(0, 16).replace('T', ' ') + 'Z'} · ${l.name} · ${l.rocket}${sites.length > 1 ? ' · ' + l.region.replace(', USA', '') : ''}`);
+  sel.replaceChildren(h('optgroup', { label: 'Upcoming' }, launches.filter((l) => !l.past).map(opt)), h('optgroup', { label: 'Recent' }, launches.filter((l) => l.past).map(opt)));
+  renderSites();
+  if (!launches.length) { $('missionName').textContent = 'No launches listed for the selected sites'; return; }
+  // Default: the next launch with a real T-0 that has not been in flight for more than two hours.
+  const keep = !pick && launches.find((l) => l.id === current?.id);
+  const next = keep || launches.find((l) => !l.past && !l.time_tbd && l.netMs > now() - 2 * 36e5) || launches.find((l) => !l.past) || launches[0];
+  select(next.id, false);
+  renderSchedule();
+}
+
 async function loadData() {
   try {
     data = await getJSON('Launch data (Next Spaceflight + Launch Library)', `data/launches.json?t=${Date.now()}`, { keep: false });
   } catch { if (!data) $('stateBanner').textContent = 'COULD NOT LOAD LAUNCH DATA'; return; }
-  launches = data.launches.map(prep).filter((l) => l.netMs);
-  const sel = $('launchSelect'), keep = current?.id;
-  const opt = (l) => h('option', { value: l.id }, `${l.time_tbd ? 'NET ' + l.net.slice(0, 7) : l.net.slice(0, 16).replace('T', ' ') + 'Z'} · ${l.name} · ${l.rocket}`);
-  sel.replaceChildren(h('optgroup', { label: 'Upcoming' }, launches.filter((l) => !l.past).map(opt)), h('optgroup', { label: 'Recent' }, launches.filter((l) => l.past).map(opt)));
-  const wanted = keep || new URLSearchParams(location.search).get('launch');
-  // Default: the next launch with a real T-0 that has not been in flight for more than two hours.
-  const next = launches.find((l) => l.id === wanted) || launches.find((l) => !l.past && !l.time_tbd && l.netMs > now() - 2 * 36e5) || launches.find((l) => !l.past) || launches[0];
-  select(next.id, false);
-  renderSchedule();
+  all = data.launches.map(prep).filter((l) => l.netMs).map((l) => ({ ...l, ...(details.get(l.id) || {}) }));
+  const first = !sites || !current;
+  sites = (sites || [data.home_region]).filter((r) => data.regions.includes(r));
+  if (!sites.length) sites = [data.home_region];
+  // A launch named in the address is shown even if its site is not one of the saved ones.
+  const wanted = first && all.find((l) => l.id === new URLSearchParams(location.search).get('launch'));
+  if (wanted && !sites.includes(wanted.region)) sites.push(wanted.region);
+  if (wanted) current = wanted;
+  refilter(false);
+}
+
+/** The full source records for one launch live in their own file; fetch on selection and once a minute after. */
+async function loadDetail(id) {
+  const have = details.get(id);
+  if (have && now() - have.at < 55e3) return;
+  try {
+    const d = await getJSON('Selected launch detail', `data/launch/${id}.json?t=${Date.now()}`, { keep: false });
+    details.set(id, { at: now(), nsf: d.nsf, ll2: d.ll2 });
+    all = all.map((l) => (l.id === id ? { ...l, nsf: d.nsf, ll2: d.ll2 } : l));
+    launches = all.filter((l) => sites.includes(l.region));
+    if (current?.id === id) select(id, false);
+  } catch { /* the index still drives the clock */ }
 }
 
 function select(id, push = true) {
   const l = launches.find((x) => x.id === id);
   if (!l) return;
-  const same = current?.id === id, unchanged = same && JSON.stringify(current) === JSON.stringify(l);
+  const same = current?.id === id && !!cd, unchanged = same && JSON.stringify(current) === JSON.stringify(l);
   current = l;
   $('launchSelect').value = id;
   if (cd && same) cd.setLaunch(l); else cd = new Countdown(l, renderControls);
-  if (push) history.replaceState(null, '', `?launch=${encodeURIComponent(id)}`);
+  if (push) { const q = new URLSearchParams(location.search); q.set('launch', id); history.replaceState(null, '', `?${q}${location.hash}`); }
   if (!unchanged) renderLaunch();
   renderControls(); renderSchedule();
+  loadDetail(id);
   if (l.pad.lat != null) {
-    weather.setTarget({ lat: l.pad.lat, lon: l.pad.lon, t0: cd.t0, tbd: noT0(), heading: l.heading, goPct: l.weather_go_pct });
-    if (!same) showLaunch(l, launches);
+    weather.setTarget({ lat: l.pad.lat, lon: l.pad.lon, t0: cd.t0, tbd: noT0(), heading: l.heading, goPct: l.weather_go_pct, region: l.region });
+    if (!same) showLaunch(l, all);
     scene3d?.setLaunch(l);
   }
 }
@@ -146,11 +200,12 @@ function previewT0() {
   if (ms <= now()) notes.push('This time has already passed: the clock will show T+.');
   if (current.closeMs && ms > current.closeMs + 999) notes.push(`Past the published window close (${utc(current.closeMs)}).`);
   if (current.openMs && ms < current.openMs - 999) notes.push(`Before the published window opens (${utc(current.openMs)}).`);
-  pv.textContent = `${utc(ms)}  ·  ${eastern(ms)}\n${d === 0 ? 'Same as the current T-0' : `${d > 0 ? 'Slips' : 'Moves up'} ${dur(d)} from the current T-0`}  ·  ${ms > now() ? 'T-' + dur(ms - now()) + ' from now' : ''}` +
+  pv.textContent = `${utc(ms)}  ·  ${zoned(ms, current.pad.timezone)}\n${d === 0 ? 'Same as the current T-0' : `${d > 0 ? 'Slips' : 'Moves up'} ${dur(d)} from the current T-0`}  ·  ${ms > now() ? 'T-' + dur(ms - now()) + ' from now' : ''}` +
     (notes.length ? '\n' + notes.join(' ') : '');
 }
 function openT0() {
   if (!cd || dlg.open) return;
+  t0Zone.options[1].value = current.pad.timezone || 'UTC'; t0Zone.options[1].textContent = 'Pad local time';
   // Coming out of a hold, start from where a plain resume would put T-0.
   const start = cd.mode === 'hold' ? now() - cd.t : cd.t0;
   $('t0Current').textContent = `${current.name} · current T-0 ${utc(cd.t0)}` + (cd.mode !== 'run' ? ` · clock is in ${cd.mode.toUpperCase()}; setting a T-0 releases it` : '');
@@ -182,6 +237,7 @@ document.addEventListener('keydown', (e) => {
   if (!$('btnHold').disabled) $('btnHold').click();
 });
 $('launchSelect').addEventListener('change', (e) => select(e.target.value));
+document.addEventListener('click', (e) => { if (!e.target.closest('#sitePick')) $('sitePick').open = false; });
 
 // ---------------------------------------------------------------- once-a-second panels
 
@@ -194,7 +250,7 @@ function renderFacts() {
     out.push(fact('No earlier than', new Date(l.netMs).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }), 'placeholder date, no time published'));
   } else {
     out.push(fact('T-0 (UTC)', utc(cd.t0), cd.slipped ? `published ${utc(l.netMs)}` : l.time_precise ? 'published time' : 'time may still move'),
-      fact('T-0 Eastern', eastern(cd.t0)), fact('T-0 your time', local(cd.t0)));
+      fact('T-0 at the pad', zoned(cd.t0, l.pad.timezone)), fact('T-0 your time', local(cd.t0)));
     if (l.openMs && l.closeMs) {
       const len = l.closeMs - l.openMs;
       out.push(fact('Launch window', len < 1000 ? 'Instantaneous' : `${dur(len)} long`, len < 1000 ? '' : `${utc(l.openMs).slice(-12, -4)} – ${utc(l.closeMs).slice(-12)}`),
@@ -265,7 +321,7 @@ function youtubeId(url) {
 
 function renderLaunch() {
   const l = current, n = l.nsf || {}, ll = l.ll2 || {}, cfg = n.rocket_config || {}, llcfg = ll.rocket?.configuration || {};
-  document.title = `${l.name} · Florida Launch Countdown`;
+  document.title = `${l.name} · Launch Countdown`;
   $('missionName').textContent = l.name;
   $('missionSub').textContent = [l.provider, l.rocket, l.pad.name, l.pad.location].filter(Boolean).join(' · ');
   $('heroBg').style.backgroundImage = l.image ? `url("${encodeURI(l.image)}")` : '';
@@ -354,12 +410,12 @@ function renderLaunch() {
 function renderSchedule() {
   if (!current) return;
   const tbl = $('schedule');
-  tbl.replaceChildren(h('tr', {}, ['T-0 (UTC)', 'In', 'Mission', 'Vehicle', 'Provider', 'Pad', 'Status', 'Weather'].map((t) => h('th', {}, t))));
+  tbl.replaceChildren(h('tr', {}, ['T-0 (UTC)', 'In', 'Mission', 'Vehicle', 'Provider', 'Site', 'Pad', 'Status', 'Weather'].map((t) => h('th', {}, t))));
   for (const l of launches) {
     tbl.append(h('tr', { class: 'click' + (l.id === current.id ? ' sel' : ''), onclick: () => { select(l.id); showTab('countdown'); } },
       h('td', {}, l.time_tbd ? `NET ${new Date(l.netMs).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })}` : utc(l.netMs)),
       h('td', {}, l.time_tbd ? '—' : (l.netMs > now() ? dur(l.netMs - now()) : ago(l.netMs, now()))),
-      h('td', {}, h('b', {}, l.name)), h('td', {}, l.rocket || '—'), h('td', {}, l.provider || '—'), h('td', {}, l.pad.name || '—'),
+      h('td', {}, h('b', {}, l.name)), h('td', {}, l.rocket || '—'), h('td', {}, l.provider || '—'), h('td', {}, (l.pad.location || l.region || '—').split(',')[0]), h('td', {}, l.pad.name || '—'),
       h('td', {}, h('span', { class: 'dot', style: l.status?.color ? `background:${l.status.color}` : '' }), l.status?.name || '—'),
       h('td', {}, l.weather_go_pct != null ? `${l.weather_go_pct}%` : '—')));
   }

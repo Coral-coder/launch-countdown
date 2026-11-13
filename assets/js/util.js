@@ -25,6 +25,12 @@ const fmtLocal = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: '
 export const utc = (ms) => (ms == null ? '—' : fmtUTC.format(ms) + ' UTC');
 export const eastern = (ms) => (ms == null ? '—' : fmtET.format(ms));
 export const local = (ms) => (ms == null ? '—' : fmtLocal.format(ms));
+/** Wall-clock time in a named IANA zone (the pad's own time); falls back to UTC if the zone is unknown. */
+export function zoned(ms, tz) {
+  if (ms == null) return '—';
+  try { return new Intl.DateTimeFormat('en-US', { timeZone: tz || 'UTC', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(ms); }
+  catch { return utc(ms); }
+}
 export const hhmmZ = (ms) => { const d = new Date(ms); return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}Z`; };
 export const dayHourZ = (ms) => { const d = new Date(ms); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${pad2(d.getUTCHours())}Z`; };
 export const parseT = (s) => { if (!s) return null; const t = Date.parse(String(s).replace(/(\.\d{3})\d+/, '$1')); return Number.isNaN(t) ? null : t; };

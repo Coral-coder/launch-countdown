@@ -324,3 +324,8 @@ html[data-theme=daylight] .fact { background: rgba(255,255,255,.85); }
 html[data-theme=daylight] .btn.ghost { color: var(--ink2); }
 html[data-theme=daylight] .tip { background: #fff; color: var(--ink); }
 html[data-theme=daylight] .leaflet-control-layers, html[data-theme=daylight] .v3-readout { color: #f0efec; }
+
+.menu { position: relative; margin: 0; font-size: 13px; color: var(--ink2); } .menu summary { padding: 6px 10px; border: 1px solid var(--axis); border-radius: 6px; list-style: none; cursor: pointer; white-space: nowrap; }
+.menu .show-tabs { left: 0; right: auto; top: 36px; max-height: 60vh; overflow-y: auto; white-space: nowrap; }
+.menu .show-tabs b { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin-top: 4px; }
+.saver #sitePick { display: none !important; }

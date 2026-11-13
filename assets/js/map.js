@@ -3,16 +3,18 @@
 
 import { $, h, destination, inclination, getJSON, hhmmZ, utc, esc } from './util.js';
 import { windGrid, WIND_LEVELS, wx } from './wx.js';
+import { siteFor, inUS } from './sites.js';
 
 const GEO = 'https://opengeo.ncep.noaa.gov/geoserver';
 const IEM = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
-const FIELD = { s: 25.5, n: 31.5, w: -84.5, e: -76 }; // area covered by the wind field
+let FIELD = { s: 25.5, n: 31.5, w: -84.5, e: -76 }; // area covered by the wind field, re-centred on each pad
 const TRACK = '#fab219';
 
+let ctl, siteRadar = null, siteLayers = {}, alertArea = null, mosaic = null, mosaicAt = 0;
 let pending = null, map, layers = {}, radarLayers = [], launchGroup, padGroup, alertLayer, windLayer, loop = null;
 
 const wms = (path, layer, opts = {}) => L.tileLayer.wms(`${GEO}/${path}/ows`, { layers: layer, format: 'image/png', transparent: true, opacity: 0.75, attribution: 'NOAA/NWS', ...opts });
-const ridge = (product) => L.tileLayer(`${IEM}/ridge::MLB-${product}-0/{z}/{x}/{y}.png?_={t}`, { t: Date.now(), opacity: 0.75, attribution: 'Iowa Environmental Mesonet' });
+const ridge = (id, product) => L.tileLayer(`${IEM}/ridge::${id.slice(1)}-${product}-0/{z}/{x}/{y}.png?_={t}`, { t: Date.now(), opacity: 0.75, attribution: 'Iowa Environmental Mesonet' });
 
 export function initMap() {
   map = L.map('map', { center: [28.56, -80.58], zoom: 8, zoomSnap: 0.5, worldCopyJump: true });
@@ -25,14 +27,6 @@ export function initMap() {
   const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 });
 
   layers = {
-    'Radar L2 · KMLB super-res reflectivity': wms('kmlb', 'kmlb_sr_bref').addTo(map),
-    'Radar L2 · KMLB super-res velocity': wms('kmlb', 'kmlb_sr_bvel'),
-    'Radar L3 · KMLB base reflectivity (N0B)': ridge('N0B'),
-    'Radar L3 · KMLB base velocity (N0U)': ridge('N0U'),
-    'Radar L3 · KMLB storm-relative velocity (N0S)': ridge('N0S'),
-    'Radar L3 · KMLB hydrometeor class (HHC)': wms('kmlb', 'kmlb_bdhc'),
-    'Radar L3 · KMLB 1-hour rainfall (OHA)': wms('kmlb', 'kmlb_boha'),
-    'Radar L3 · KMLB storm-total rainfall (DSA)': wms('kmlb', 'kmlb_bdsa'),
     'Radar · MRMS national composite': wms('conus/conus_bref_qcd', 'conus_bref_qcd'),
     'Satellite · GOES-East GeoColor': L.tileLayer('https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/default/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png?_={t}', { t: Date.now(), maxNativeZoom: 7, opacity: 0.8, attribution: 'NASA GIBS' }),
     'Satellite · GOES-East infrared': L.tileLayer(`${IEM}/goes-east-ir-4km-900913/{z}/{x}/{y}.png?_={t}`, { t: Date.now(), opacity: 0.6, attribution: 'IEM' }),
@@ -45,7 +39,7 @@ export function initMap() {
   padGroup = L.layerGroup().addTo(map);
   windLayer = new WindLayer().addTo(map);
 
-  L.control.layers({ Dark: dark, 'Satellite imagery': sat, Streets: osm },
+  ctl = L.control.layers({ Dark: dark, 'Satellite imagery': sat, Streets: osm },
     { ...layers, 'NWS alert polygons': alertLayer, 'Wind field': windLayer, 'Ground track & range rings': launchGroup, 'Launch pads': padGroup }, { collapsed: true }).addTo(map);
   L.control.scale({ imperial: true }).addTo(map);
 
@@ -60,12 +54,12 @@ export function initMap() {
   setInterval(refreshRadar, 2 * 6e4);
   setInterval(refreshWind, 15 * 6e4);
   setInterval(loadAlerts, 5 * 6e4);
-  loadAlerts(); stamp();
+  stamp();
   $('mapLegend').replaceChildren(
     h('span', {}, h('i', { style: `background:${TRACK}` }), 'Ground track from the published launch azimuth'),
     h('span', {}, h('i', { style: 'background:#c3c2b7' }), '5 and 10 nmi lightning rings around the pad'),
     h('span', {}, h('i', { style: 'background:#7fb2f5' }), 'Wind field streaks (longer and brighter = faster)'),
-    h('span', {}, 'Use the layer button (top right of the map) for velocity, Level III products, satellite and rainfall.'));
+    h('span', {}, 'Use the layer button (top right of the map) for velocity, Level III products, satellite and rainfall.'), h('span', { id: 'radarNote' }));
 }
 
 /** Call when the map's tab becomes visible: Leaflet cannot measure a hidden container. */
@@ -74,6 +68,7 @@ export function mapShown() { map.invalidateSize(); windLayer.reset(); if (pendin
 const stamp = () => { $('mapStamp').textContent = `radar refreshed ${hhmmZ(Date.now())}`; };
 
 function refreshRadar() {
+  if (mosaic) showMosaic();
   for (const l of radarLayers) {
     if (!map.hasLayer(l)) continue;
     if (l.wmsParams) l.setParams({ _: Date.now() }, false); else { l.options.t = Date.now(); l.redraw(); }
@@ -83,10 +78,57 @@ function refreshRadar() {
 
 async function loadAlerts() {
   try {
-    const d = await getJSON('NWS alerts (Florida polygons)', 'https://api.weather.gov/alerts/active?area=FL', { keep: false });
     alertLayer.clearLayers();
+    if (!alertArea) return;
+    const d = await getJSON('NWS alert polygons', `https://api.weather.gov/alerts/active?area=${alertArea}`, { keep: false });
     alertLayer.addData({ type: 'FeatureCollection', features: d.features.filter((f) => f.geometry) });
   } catch { /* feed status shows the failure */ }
+}
+
+// ---- per-site radar
+/** The NEXRAD products for one radar, as map layers. */
+function radarProducts(id) {
+  const lc = id.toLowerCase();
+  return {
+    [`Radar L2 · ${id} super-res reflectivity`]: wms(lc, `${lc}_sr_bref`),
+    [`Radar L2 · ${id} super-res velocity`]: wms(lc, `${lc}_sr_bvel`),
+    [`Radar L3 · ${id} base reflectivity (N0B)`]: ridge(id, 'N0B'),
+    [`Radar L3 · ${id} base velocity (N0U)`]: ridge(id, 'N0U'),
+    [`Radar L3 · ${id} storm-relative velocity (N0S)`]: ridge(id, 'N0S'),
+    [`Radar L3 · ${id} hydrometeor class (HHC)`]: wms(lc, `${lc}_bdhc`),
+    [`Radar L3 · ${id} 1-hour rainfall (OHA)`]: wms(lc, `${lc}_boha`),
+    [`Radar L3 · ${id} storm-total rainfall (DSA)`]: wms(lc, `${lc}_bdsa`),
+  };
+}
+
+/** Latest frame of the worldwide radar mosaic, for sites no NEXRAD covers. */
+async function showMosaic() {
+  if (Date.now() - mosaicAt < 5 * 6e4 && mosaic) return;
+  try {
+    const d = await getJSON('RainViewer radar frames', 'https://api.rainviewer.com/public/weather-maps.json', { keep: false });
+    const f = d.radar.past[d.radar.past.length - 1];
+    if (mosaic) { map.removeLayer(mosaic); ctl.removeLayer(mosaic); }
+    mosaic = L.tileLayer(`${d.host}${f.path}/256/{z}/{x}/{y}/4/1_1.png`, { opacity: +$('radarOpacity').value, maxNativeZoom: 7, attribution: 'RainViewer' }).addTo(map);
+    ctl.addOverlay(mosaic, 'Radar · worldwide mosaic'); mosaicAt = Date.now();
+    radarLayers = radarLayers.filter((l) => map.hasLayer(l) || l !== mosaic).concat(mosaic);
+  } catch { /* note below already explains */ }
+}
+
+function setSite(region) {
+  const cfg = siteFor(region), id = cfg.radar || null, us = inUS(region);
+  alertArea = cfg.area || null; loadAlerts();
+  if (id === siteRadar && Object.keys(siteLayers).length) return;
+  for (const l of Object.values(siteLayers)) { map.removeLayer(l); ctl.removeLayer(l); }
+  siteRadar = id; siteLayers = id ? radarProducts(id) : {};
+  for (const [name, l] of Object.entries(siteLayers)) ctl.addOverlay(l, name);
+  radarLayers = [...Object.values(siteLayers), ...Object.values(layers)];
+  const mrms = layers['Radar · MRMS national composite'];
+  if (id) { Object.values(siteLayers)[0].addTo(map); map.removeLayer(mrms); }
+  else if (us) mrms.addTo(map);
+  else map.removeLayer(mrms);
+  if (mosaic && (id || us)) { map.removeLayer(mosaic); ctl.removeLayer(mosaic); mosaic = null; }
+  if (!id && !us) showMosaic();
+  $('radarNote').textContent = id ? `Site radar: ${id}.` : us ? 'No NEXRAD radar is set up for this site; showing the US national composite.' : 'No NEXRAD coverage here; showing a worldwide radar mosaic where one exists.';
 }
 
 // ---- radar loop (RainViewer mosaic, last two hours)
@@ -115,6 +157,8 @@ async function toggleLoop() {
 // ---- launch overlays
 export function showLaunch(launch, all) {
   launchGroup.clearLayers(); padGroup.clearLayers();
+  setSite(launch.region);
+  if (launch.pad.lat != null) FIELD = { s: launch.pad.lat - 3, n: launch.pad.lat + 3, w: launch.pad.lon - 4.25, e: launch.pad.lon + 4.25 };
   const seen = new Set();
   for (const l of all) {
     const p = l.pad; if (p.lat == null || seen.has(p.name)) continue; seen.add(p.name);
@@ -179,7 +223,7 @@ const WindLayer = L.Layer.extend({
     if (this.reduced) this.arrows();
   },
   spawn(p) {
-    const b = this._map.getBounds(), g = FIELD;
+    const b = this._map.getBounds(), g = this.grid ? this.grid.bounds : FIELD;
     const s = Math.max(b.getSouth(), g.s), n = Math.min(b.getNorth(), g.n), w = Math.max(b.getWest(), g.w), e = Math.min(b.getEast(), g.e);
     p.lat = s + Math.random() * (n - s); p.lon = w + Math.random() * (e - w); p.age = Math.random() * 80 | 0;
     return p;

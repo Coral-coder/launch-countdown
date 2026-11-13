@@ -72,9 +72,27 @@ def nsf_list(query: str = "") -> tuple[list, str]:
     return decode_at(payload, '"initialLaunches":') or [], payload
 
 
-def florida_pad_ids(payload: str) -> list[str]:
-    pads = re.findall(r'\{"label":"([^"]*Florida, USA)","value":"(\d+)"\}', payload)
-    return [v for _, v in pads]
+def locations(payload: str) -> dict[str, list[str]]:
+    """Launch sites from the page's pad filter: {location name: [pad ids]}."""
+    out: dict[str, list[str]] = {}
+    for _pad, loc, pid in re.findall(r'\{"label":"([^"]*?) @ ([^"]*)","value":"(\d+)"\}', payload):
+        out.setdefault(loc, []).append(pid)
+    return out
+
+
+def region(location: str) -> str:
+    """Group sites the way a viewer thinks of them: US state, otherwise country."""
+    parts = [p.strip() for p in (location or "Unknown").split(",")]
+    if parts[-1] == "USA" and len(parts) >= 2:
+        return f"{parts[-2]}, USA"
+    if parts[-1] == "France" and len(parts) >= 3:
+        return parts[-2]
+    return parts[-1]
+
+
+HOME_REGION = "Florida, USA"
+SWEEP_MINUTES = 55     # how often every site is re-read; in between only the busy ones are
+HOT_HOURS = 72         # a site with a launch this close is re-read on every run
 
 
 def nsf_detail(launch_id: int) -> dict | None:
@@ -87,33 +105,74 @@ def nsf_detail(launch_id: int) -> dict | None:
     return None
 
 
-def fetch_nsf(max_details: int) -> list[dict]:
-    _, payload = nsf_list()
-    ids = florida_pad_ids(payload)
-    if not ids:
-        raise RuntimeError("could not find Florida pad filters on nextspaceflight.com")
-    f = "pad_" + "_".join(ids)
-    upcoming, _ = nsf_list(f"?q=&f={f}")
-    try:
-        past, _ = nsf_list(f"?q=&tab=past&f={f}")
-    except RuntimeError as e:
-        log("past list failed:", e)
-        past = []
-    fl = lambda rows: [r for r in rows if "Florida" in (r.get("pad_location_name") or "")]  # noqa: E731
-    upcoming, past = fl(upcoming), fl(past)[:4]
-    log(f"nextspaceflight: {len(upcoming)} upcoming, {len(past)} recent Florida launches")
+def fetch_nsf(prev: dict, max_details: int) -> tuple[list[dict], bool]:
+    """Read upcoming launches site by site.
 
-    out = []
-    for n, row in enumerate(upcoming + past):
-        detail = None
-        if n < max_details or row in past:
+    The list page returns at most 18 launches per query, so each site is queried on its own.
+    A full sweep of every site runs about once an hour; other runs re-read the home region and
+    any site with a launch in the next few days, and reuse the last result for the rest.
+    """
+    _, payload = nsf_list()
+    locs = locations(payload)
+    if not locs:
+        raise RuntimeError("could not find the pad filters on nextspaceflight.com")
+
+    now = datetime.now(timezone.utc)
+    cached: dict[str, list[dict]] = {}
+    for x in prev.get("launches", []):
+        if x.get("id", "").startswith("nsf-") and not x.get("past"):
+            cached.setdefault(x["pad"].get("location") or "", []).append(x)
+    swept = parse_t(prev.get("swept_at"))
+    full = not swept or (now - swept).total_seconds() > SWEEP_MINUTES * 60 or not cached
+    hot = {loc for loc, rows in cached.items() for x in rows
+           if not x.get("time_tbd") and parse_t(x.get("net")) and abs((parse_t(x["net"]) - now).total_seconds()) < HOT_HOURS * 3600}
+
+    items: list[dict] = []
+    read = 0
+    for loc, ids in locs.items():
+        home = region(loc) == HOME_REGION
+        if not (full or home or loc in hot):
+            # carry the last result forward untouched until the next full sweep
+            items += [{"cached": x} for x in cached.get(loc, [])]
+            continue
+        try:
+            rows, _ = nsf_list("?q=&f=pad_" + "_".join(ids))
+            read += 1
+            time.sleep(0.15)
+        except RuntimeError as e:
+            log("list failed", loc, e)
+            items += [{"cached": x} for x in cached.get(loc, [])]
+            continue
+        items += [{"summary": r, "past": False, "home": home} for r in rows]
+        if home:
             try:
-                detail = nsf_detail(row["id"])
-                time.sleep(0.4)
+                past, _ = nsf_list("?q=&tab=past&f=pad_" + "_".join(ids))
+                items += [{"summary": r, "past": True, "home": True} for r in past[:3]]
             except RuntimeError as e:
-                log("detail failed", row["id"], e)
-        out.append({"summary": row, "detail": detail, "past": row in past})
-    return out
+                log("past list failed", loc, e)
+
+    # Detail pages: every launch with a real date, soonest first, plus everything at home.
+    old = {x["id"]: x for x in prev.get("launches", [])}
+    fresh = [it for it in items if "summary" in it]
+    fresh.sort(key=lambda it: (not it["home"], "23:59:59.0000" in (it["summary"].get("net") or ""), it["summary"].get("net") or "9"))
+    budget = max_details
+    for it in fresh:
+        s = it["summary"]
+        before = old.get(f"nsf-{s['id']}") or {}
+        placeholder = "23:59:59.0000" in (s.get("net") or "")
+        have = (before.get("nsf") or {}).get("missions") is not None
+        if budget > 0 and (it["past"] or not placeholder or not have):
+            try:
+                it["detail"] = nsf_detail(s["id"])
+                budget -= 1
+                time.sleep(0.25)
+            except RuntimeError as e:
+                log("detail failed", s["id"], e)
+        if not it.get("detail") and have:
+            it["detail"] = before["nsf"]  # keep the last detail we had rather than lose it
+    log(f"nextspaceflight: {'full sweep' if full else 'partial'}, {read} of {len(locs)} sites read, "
+        f"{len(fresh)} launches listed, {max_details - budget} detail pages, {len(items) - len(fresh)} carried over")
+    return items, full
 
 
 # ---------------------------------------------------------------- launch library 2
@@ -142,7 +201,7 @@ def prune(o, depth=0):
 
 
 def fetch_ll2(limit: int) -> list[dict]:
-    q = urllib.parse.urlencode({"location__ids": "12,27", "limit": limit, "mode": "detailed", "format": "json"})
+    q = urllib.parse.urlencode({"limit": limit, "mode": "detailed", "format": "json"})
     data = json.loads(get(f"{LL2}/launches/upcoming/?{q}", tries=2))
     rows = [prune(r) for r in data.get("results", [])]
     log(f"launch library: {len(rows)} launches")
@@ -190,7 +249,7 @@ NSF_STATUS = {0: "TBD Date & Time", 1: "TBD Time", 2: "Go", 3: "Hold", 4: "Scrub
 
 
 def from_nsf(item: dict, ll: dict | None) -> dict:
-    s, d = item["summary"], item["detail"] or {}
+    s, d = item["summary"], item.get("detail") or {}
     pad = d.get("pad") or {}
     llpad = (ll or {}).get("pad") or {}
     status = d.get("status") or {"id": s.get("status_id"), "name": NSF_STATUS.get(s.get("status_id"), "Unknown")}
@@ -210,11 +269,13 @@ def from_nsf(item: dict, ll: dict | None) -> dict:
         "rocket": s.get("rocket_config_name"),
         "image": (d.get("rocket_config") or {}).get("image") or s.get("rocket_config_thumbnail")
                  or ((ll or {}).get("image") or {}).get("image_url"),
+        "region": region(pad.get("location_name") or s.get("pad_location_name")),
         "pad": {
             "name": pad.get("name") or s.get("pad_name"),
             "location": pad.get("location_name") or s.get("pad_location_name"),
             "lat": pad.get("latitude") or _f(llpad.get("latitude")),
             "lon": pad.get("longitude") or _f(llpad.get("longitude")),
+            "timezone": pad.get("timezone") or (llpad.get("location") or {}).get("timezone_name"),
         },
         "heading": d.get("heading"),
         "weather_go_pct": d.get("launch_weather") if d.get("launch_weather") is not None else (ll or {}).get("probability"),
@@ -241,8 +302,10 @@ def from_ll2(r: dict) -> dict:
         "provider": (r.get("launch_service_provider") or {}).get("name"),
         "rocket": cfg.get("full_name") or cfg.get("name"),
         "image": (r.get("image") or {}).get("image_url"),
+        "region": region((pad.get("location") or {}).get("name", "").replace(", FL, USA", ", Florida, USA")),
         "pad": {"name": pad.get("name"), "location": (pad.get("location") or {}).get("name"),
-                "lat": _f(pad.get("latitude")), "lon": _f(pad.get("longitude"))},
+                "lat": _f(pad.get("latitude")), "lon": _f(pad.get("longitude")),
+                "timezone": (pad.get("location") or {}).get("timezone_name")},
         "heading": None,
         "weather_go_pct": r.get("probability"),
         "nsf_url": None,
@@ -269,20 +332,34 @@ def load_previous(src: str | None) -> dict:
         return {}
 
 
+INDEX_KEYS = ("id", "name", "past", "net", "window_open", "window_close", "time_tbd", "time_precise", "status", "provider",
+              "rocket", "image", "region", "pad", "heading", "weather_go_pct", "nsf_url")
+
+
+def write_json(path: str, obj) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="data/launches.json")
-    ap.add_argument("--previous", help="path or URL of the last published launches.json (fallback cache)")
-    ap.add_argument("--max-details", type=int, default=30)
-    ap.add_argument("--ll2-limit", type=int, default=25)
+    ap.add_argument("--previous", help="path or URL of the last published cache.json (carried-over data and fallback)")
+    ap.add_argument("--max-details", type=int, default=90)
+    ap.add_argument("--ll2-limit", type=int, default=50)
     a = ap.parse_args()
+    out_dir = os.path.dirname(a.out) or "."
 
-    prev = load_previous(a.previous)
+    prev = load_previous(a.previous) or load_previous(os.path.join(out_dir, "cache.json"))
     sources, errors = [], []
+    swept_at = prev.get("swept_at")
 
     try:
-        nsf = fetch_nsf(a.max_details)
+        nsf, full = fetch_nsf(prev, a.max_details)
         sources.append("nextspaceflight.com")
+        if full:
+            swept_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     except Exception as e:  # noqa: BLE001 - any scrape failure falls back to other sources
         log("nextspaceflight failed:", e)
         errors.append(f"nextspaceflight: {e}")
@@ -294,15 +371,28 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         log("launch library failed:", e)
         errors.append(f"launch library: {e}")
-        # Reuse the enrichment from the last published file (LL2 rate-limits shared CI addresses).
+        # Reuse the enrichment from the last run (LL2 rate-limits shared CI addresses).
         ll2 = [x["ll2"] for x in prev.get("launches", []) if x.get("ll2")]
         if ll2:
             sources.append("Launch Library 2 (cached)")
 
     if nsf:
         used: set = set()
-        # Launch Library rows here are upcoming launches, so never pair them with a flown one.
-        launches = [from_nsf(it, None if it["past"] else match_ll2(it["summary"], ll2, used)) for it in nsf]
+        launches = []
+        for it in nsf:
+            if "cached" in it:
+                launches.append(it["cached"])
+            else:
+                # Launch Library rows are upcoming launches, so never pair them with a flown one.
+                launches.append(from_nsf(it, None if it["past"] else match_ll2(it["summary"], ll2, used)))
+        # A launch listed without a detail page has no coordinates: borrow them from its pad's other launches.
+        pads = {(x["pad"]["location"], x["pad"]["name"]): x["pad"] for x in launches + prev.get("launches", []) if x["pad"].get("lat") is not None}
+        for x in launches:
+            known = pads.get((x["pad"]["location"], x["pad"]["name"]))
+            if x["pad"].get("lat") is None and known:
+                x["pad"].update(lat=known["lat"], lon=known["lon"], timezone=x["pad"].get("timezone") or known.get("timezone"))
+        seen: set = set()
+        launches = [x for x in launches if not (x["id"] in seen or seen.add(x["id"]))]
     elif ll2:
         launches = [from_ll2(r) for r in ll2]
     elif prev.get("launches"):
@@ -318,24 +408,37 @@ def main() -> int:
         launches.sort(key=lambda x: (x["past"], x["net"] or "9999"))
         prev = {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "swept_at": swept_at,
             "sources": sources,
             "errors": errors,
             "stale": False,
             "launches": launches,
         }
 
-    with open(a.out, "w", encoding="utf-8") as f:
-        json.dump(prev, f, ensure_ascii=False, separators=(",", ":"))
+    # cache.json: everything, for the next run. launches.json: the light index the page polls.
+    # launch/<id>.json: the full source records for one launch, loaded when it is selected.
+    write_json(os.path.join(out_dir, "cache.json"), prev)
+    regions = sorted({x.get("region") or "Unknown" for x in prev["launches"]}, key=lambda r: (r != HOME_REGION, r))
+    write_json(a.out, {**{k: v for k, v in prev.items() if k != "launches"}, "home_region": HOME_REGION, "regions": regions,
+                       "launches": [{k: x.get(k) for k in INDEX_KEYS} for x in prev["launches"]]})
+    for x in prev["launches"]:
+        write_json(os.path.join(out_dir, "launch", f"{x['id']}.json"), {"id": x["id"], "nsf": x.get("nsf"), "ll2": x.get("ll2")})
+
     # A tiny file for the Windows screensaver helper, which only needs to know when to wake the display.
-    now_iso = datetime.now(timezone.utc)
-    upcoming = [x for x in prev["launches"] if not x.get("past") and not x.get("time_tbd") and parse_t(x.get("net"))
-                and (parse_t(x["net"]) - now_iso).total_seconds() > -900]
-    nxt = upcoming[0] if upcoming else None
-    with open(os.path.join(os.path.dirname(a.out) or ".", "next.json"), "w", encoding="utf-8") as f:
-        json.dump({"generated_at": prev.get("generated_at"), "id": nxt and nxt["id"], "name": nxt and nxt["name"],
-                   "rocket": nxt and nxt["rocket"], "pad": nxt and nxt["pad"]["name"],
-                   "net": nxt and parse_t(nxt["net"]).strftime("%Y-%m-%dT%H:%M:%SZ")}, f)
-    log(f"wrote {a.out}: {len(prev['launches'])} launches from {', '.join(prev.get('sources', []))}")
+    now = datetime.now(timezone.utc)
+
+    def brief(x):
+        return {"id": x["id"], "name": x["name"], "rocket": x["rocket"], "pad": x["pad"]["name"], "region": x.get("region"),
+                "net": parse_t(x["net"]).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    firm = [x for x in prev["launches"] if not x.get("past") and not x.get("time_tbd") and parse_t(x.get("net"))
+            and (parse_t(x["net"]) - now).total_seconds() > -900]
+    by_region: dict = {}
+    for x in firm:
+        by_region.setdefault(x.get("region") or "Unknown", brief(x))
+    home = by_region.get(HOME_REGION) or {"id": None, "name": None, "rocket": None, "pad": None, "region": HOME_REGION, "net": None}
+    write_json(os.path.join(out_dir, "next.json"), {"generated_at": prev.get("generated_at"), **home, "by_region": by_region})
+    log(f"wrote {a.out}: {len(prev['launches'])} launches in {len(regions)} regions from {', '.join(prev.get('sources', []))}")
     return 0
 
 
