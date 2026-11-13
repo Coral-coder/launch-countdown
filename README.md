@@ -53,11 +53,11 @@ It does not keep the display awake: there is no video playback and no power requ
 
 ## How the data gets there
 
-Updates happen in each viewer's browser, not on a server schedule.
+Launch time and status update in each viewer's browser; everything a browser cannot fetch is refreshed by an hourly deploy.
 
 - **Live, from the browser:** launch time, window, status and weather odds come from Launch Library 2 every ten minutes (it allows 15 requests an hour per address). All weather, the 2D radar and the 3D radar volume are also fetched directly by the browser.
-- **As of the last site update:** Next Spaceflight does not allow requests from web pages, so `scripts/fetch_launches.py` reads it only when the site is deployed (on a push to `main`, or by running the workflow by hand). That snapshot supplies the full launch list and the Next Spaceflight-only details: launch azimuth, countdown timeline, recovery, statistics. When Launch Library has a newer edit for a launch, its time and status win; launches the snapshot does not know are added.
-- **Not live:** aircraft, vessels and hazard areas (`scripts/fetch_traffic.py`) cannot be read from a browser either, so they are also only as fresh as the last deploy. Aircraft older than twenty minutes are not drawn. Making these live needs a relay, or the screensaver fetching them itself.
+- **As of the last site update:** Next Spaceflight does not allow requests from web pages, so `scripts/fetch_launches.py` reads it when the site is deployed: hourly, on a push to `main`, or by running the workflow by hand. That snapshot supplies the full launch list and the Next Spaceflight-only details: launch azimuth, countdown timeline, recovery, statistics. When Launch Library has a newer edit for a launch, its time and status win; launches the snapshot does not know are added.
+- **Not live:** aircraft, vessels and hazard areas (`scripts/fetch_traffic.py`) cannot be read from a browser either, so they are refreshed by the hourly deploy. Aircraft older than twenty minutes are not drawn. Making these live needs a relay, or the screensaver fetching them itself.
 
 The deploy writes `data/launches.json` (a light index), `data/launch/<id>.json` (full records for one launch), `data/cache.json` (carried between runs), `data/next.json`, `data/traffic.json` and `data/hazards.json`.
 

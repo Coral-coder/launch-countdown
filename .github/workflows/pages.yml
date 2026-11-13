@@ -1,9 +1,11 @@
-# Runs only when the site changes (or by hand). Live updates happen in each viewer's browser.
+# Runs hourly, when the site changes, or by hand. Launch time and status also update live in each viewer's browser.
 name: Build and deploy
 
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 * * * *"   # hourly, off the top of the hour where GitHub's scheduler is busiest
   workflow_dispatch:
 
 permissions:
