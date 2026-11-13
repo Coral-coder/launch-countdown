@@ -461,6 +461,17 @@ async function checkVersion() {
   } catch { /* offline or running locally */ }
 }
 
+// ---------------------------------------------------------------- themes
+
+const themeSel = $('themeSel');
+themeSel.value = document.documentElement.dataset.theme || '';
+if (themeSel.selectedIndex < 0) themeSel.value = '';
+themeSel.addEventListener('change', () => {
+  if (themeSel.value) document.documentElement.dataset.theme = themeSel.value; else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem('launch-countdown:theme', themeSel.value); } catch { /* storage unavailable */ }
+  weather.redraw();
+});
+
 // ---------------------------------------------------------------- boot
 
 if (!SAVER) $('padStream').src = $('padStream').dataset.src;

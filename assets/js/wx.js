@@ -2,7 +2,7 @@
 // and the unofficial commit-criteria screen built on top.
 
 import { $, h, num, getJSON, compass, cToF, kmhToKt, msToKt, utc, hhmmZ, dayHourZ, ago, destination, sunElevation, esc } from './util.js';
-import { lineChart, skewT, hodograph, soundingStats, soundingTable } from './charts.js';
+import { lineChart, skewT, hodograph, soundingStats, soundingTable, refreshTheme } from './charts.js';
 import { now } from './clock.js';
 
 const OM = 'https://api.open-meteo.com/v1/forecast';
@@ -57,6 +57,9 @@ export function setTarget(target) {
   if (moved || retimed) loadProfiles();
   renderLcc();
 }
+
+/** Redraw everything painted on canvas after a theme change. */
+export function redraw() { refreshTheme(); renderCharts(); renderSounding(); }
 
 export function start() {
   const src = $('sndSource');

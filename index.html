@@ -1,6 +1,14 @@
 <!doctype html>
 <html lang="en">
 <head>
+<script>
+// Apply the saved theme before first paint. ?theme=name overrides it (used by the screensaver).
+(function () {
+  var t = new URLSearchParams(location.search).get('theme');
+  try { t = t || localStorage.getItem('launch-countdown:theme'); } catch (e) {}
+  if (t) document.documentElement.dataset.theme = t;
+})();
+</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Florida Launch Countdown</title>
@@ -10,6 +18,7 @@
 </head>
 <body>
 
+<div class="marking" aria-hidden="true">UNCLASSIFIED // PUBLIC SOURCES // NOT AN OFFICIAL PRODUCT</div>
 <header class="topbar">
   <div class="brand">FLORIDA LAUNCH <b>COUNTDOWN</b></div>
   <select id="launchSelect" aria-label="Select launch"></select>
@@ -27,6 +36,12 @@
 <nav class="tabbar" aria-label="Sections">
   <div class="tabs" id="tabs" role="tablist"></div>
   <div class="show">
+    <label title="Colour theme">Theme
+      <select id="themeSel">
+        <option value="">Mission Control</option><option value="agency">Agency</option><option value="deepblue">Deep Blue</option>
+        <option value="tactical">Tactical</option><option value="classified">Restricted</option><option value="console">Console</option><option value="daylight">Daylight</option>
+      </select>
+    </label>
     <button id="btnShow" class="btn ghost small" title="Cycle through the tabs automatically (P)">▶ Slideshow</button>
     <label title="Seconds on each tab"><input type="number" id="showSecs" min="3" max="600" step="1" value="20"> s</label>
     <details id="showPick"><summary title="Choose which tabs the slideshow visits">Tabs</summary><div id="showTabs" class="show-tabs"></div></details>
@@ -226,6 +241,7 @@
     </div>
   </form>
 </dialog>
+<div class="marking" aria-hidden="true">UNCLASSIFIED // PUBLIC SOURCES // NOT AN OFFICIAL PRODUCT</div>
 <div id="tip" class="tip" hidden></div>
 <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

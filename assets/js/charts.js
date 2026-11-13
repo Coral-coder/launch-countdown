@@ -2,7 +2,14 @@
 
 import { h, $, dayHourZ, num, compass } from './util.js';
 
-const C = { ink: '#f0efec', ink2: '#c3c2b7', muted: '#898781', grid: '#2c2c2a', axis: '#383835', surface: '#1a1a19', raised: '#232321', warn: '#fab219' };
+// Chart chrome follows the page theme: each colour is read from the matching CSS token when drawn.
+const FALLBACK = { ink: '#f0efec', ink2: '#c3c2b7', muted: '#898781', grid: '#2c2c2a', axis: '#383835', surface: '#1a1a19', raised: '#232321', warn: '#fab219' };
+let tokens = null;
+export function refreshTheme() { tokens = null; }
+const C = new Proxy({}, { get(_, k) {
+  if (!tokens) { const cs = getComputedStyle(document.documentElement); tokens = {}; for (const n of Object.keys(FALLBACK)) tokens[n] = cs.getPropertyValue('--' + n).trim() || FALLBACK[n]; }
+  return tokens[k];
+} });
 // Categorical slots (dark-surface steps), assigned in fixed order per chart.
 export const SERIES = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#9085e9'];
 
