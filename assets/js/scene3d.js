@@ -23,8 +23,9 @@ const VOL = { half: 150, top: 16, N: 7, NZ: 32 };
 const CL = [1000, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150];
 const stdKm = (p) => 44.33 * (1 - (p / 1013.25) ** 0.1903); // standard-atmosphere height of a pressure level
 
+let radarMesh = null, radar = null, radarKey = '', radarBusy = false, radarNote = 'radar volume loading…', worker = null;
 let renderer, scene, camera, controls, root, cloudMesh, marker, markerDrop, box, launch = null, tGetter = () => null;
-let ex = 4, shown = false, raf = 0, cloud = null, cloudKey = '', lastView = 'clouds';
+let ex = 1, shown = false, raf = 0, cloud = null, cloudKey = '', lastView = 'clouds';
 
 /** Catmull-Rom through a table column, so position is a smooth function of flight time. */
 function spline(col, t) {
@@ -208,13 +209,109 @@ void main() {
   outColor = vec4(col / alpha, alpha);
 }`;
 
+// ---------------------------------------------------------------- radar volume
+
+const RADAR_GRID = { n: 192, nz: 40, half: VOL.half, top: VOL.top };
+const BUCKET = 'https://unidata-nexrad-level2.s3.amazonaws.com';
+// NWS reflectivity colours, 5 dBZ steps from 5 to 75
+const DBZ_COLORS = ['#04e9e7', '#019ff4', '#0300f4', '#02fd02', '#01c501', '#008e00', '#fdf802', '#e5bc00', '#fd9500', '#fd0000', '#d40000', '#bc0000', '#f800fd', '#9854c6', '#fdfdfd'];
+function dbzLut() {
+  const d = new Uint8Array(256 * 4);
+  for (let b = 0; b < 256; b++) {
+    const dbz = b / 2 - 32, i = Math.max(0, Math.min(DBZ_COLORS.length - 1, Math.floor((dbz - 5) / 5))), c = new THREE.Color(DBZ_COLORS[i]);
+    d.set([c.r * 255, c.g * 255, c.b * 255, 255], b * 4);
+  }
+  const t = new THREE.DataTexture(d, 256, 1); t.magFilter = t.minFilter = THREE.NearestFilter; t.needsUpdate = true;
+  return t;
+}
+const RFRAG = `
+precision highp float; precision highp sampler3D;
+uniform sampler3D map; uniform sampler2D lut; uniform vec3 size; uniform float minDbz; uniform float opacity;
+in vec3 vOrigin; in vec3 vDir; out vec4 outColor;
+vec2 hitBox(vec3 o, vec3 d) {
+  vec3 inv = 1.0 / d, a = (-0.5 - o) * inv, b = (0.5 - o) * inv, mn = min(a, b), mx = max(a, b);
+  return vec2(max(mn.x, max(mn.y, mn.z)), min(mx.x, min(mx.y, mx.z)));
+}
+void main() {
+  vec3 d = normalize(vDir);
+  vec2 hit = hitBox(vOrigin, d);
+  if (hit.x > hit.y) discard;
+  hit.x = max(hit.x, 0.0);
+  const int STEPS = 160;
+  float dt = (hit.y - hit.x) / float(STEPS), T = 1.0, km = length(d * size) * dt;
+  vec3 p = vOrigin + d * (hit.x + dt * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))))), col = vec3(0.0);
+  for (int i = 0; i < STEPS; i++) {
+    // texture axes: x east, y north, z up; bytes are dBZ * 2 + 64, 0 = no echo
+    float r = texture(map, vec3(p.x + 0.5, 0.5 - p.z, p.y + 0.5)).r, dbz = r * 127.5 - 32.0;
+    if (r > 0.004 && dbz >= minDbz) {
+      float s = smoothstep(minDbz, 60.0, dbz);
+      float a = 1.0 - exp(-(0.22 + 2.4 * s) * opacity * km);
+      // brighter toward the top of the echo so storm cores read as solid shapes
+      vec3 c = mix(texture(lut, vec2(r, 0.5)).rgb, vec3(1.0), 0.14) * (0.8 + 0.2 * (p.y + 0.5));
+      col += T * a * c; T *= 1.0 - a;
+      if (T < 0.02) break;
+    }
+    p += d * dt;
+  }
+  float alpha = 1.0 - T;
+  if (alpha < 0.004) discard;
+  outColor = vec4(col / alpha, alpha);
+}`;
+
+function buildRadar(g) {
+  if (!radar) return;
+  // the radar site itself, relative to the pad
+  const [rx, rz] = proj(radar.site.lat, radar.site.lon);
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 12), new THREE.MeshBasicMaterial({ color: 0x7fe0a0 })); dot.position.set(rx, 0.3, rz); dot.userData.fixed = 0.006; g.add(dot);
+  g.add(label('KMLB radar', new THREE.Vector3(rx + 2, 0.5, rz), { color: '#9be8b5', size: 10 }));
+  const tex = new THREE.Data3DTexture(radar.data, radar.n, radar.n, radar.nz);
+  tex.format = THREE.RedFormat; tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.unpackAlignment = 1; tex.needsUpdate = true;
+  const h3 = VOL.top * ex;
+  radarMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: RFRAG, side: THREE.BackSide, transparent: true, depthWrite: false,
+    uniforms: { map: { value: tex }, lut: { value: dbzLut() }, size: { value: new THREE.Vector3(VOL.half * 2, VOL.top, VOL.half * 2) },
+      minDbz: { value: +$('v3MinDbz').value }, opacity: { value: +$('v3RadOp').value } },
+  }));
+  radarMesh.scale.set(VOL.half * 2, h3, VOL.half * 2); radarMesh.position.y = h3 / 2; radarMesh.renderOrder = 6;
+  radarMesh.visible = $('v3Radar').checked;
+  g.add(radarMesh);
+}
+
+/** Find the newest KMLB volume in the public archive and hand it to the decoder if it is new. */
+async function loadRadar() {
+  if (!launch || launch.pad.lat == null || radarBusy || !$('v3Radar').checked) return;
+  radarBusy = true;
+  try {
+    let key = null;
+    for (const back of [0, 1]) { // around 00Z the newest volume is still under yesterday's prefix
+      const d = new Date(now() - back * 864e5), prefix = `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/KMLB/`;
+      const xml = await (await fetch(`${BUCKET}/?list-type=2&prefix=${prefix}`, { cache: 'no-store' })).text();
+      const keys = [...xml.matchAll(/<Key>([^<]+)<\/Key>/g)].map((m) => m[1]).filter((k) => !k.endsWith('_MDM'));
+      if (keys.length) { key = keys[keys.length - 1]; break; }
+    }
+    if (!key) throw new Error('no volumes listed');
+    const id = `${key}|${launch.pad.lat},${launch.pad.lon}`;
+    if (id === radarKey) { radarBusy = false; return; }
+    if (!radar) radarNote = 'radar volume downloading and decoding…';
+    worker = worker || new Worker(new URL('./radar-worker.js', import.meta.url));
+    worker.onmessage = (e) => {
+      radarBusy = false;
+      if (!e.data.ok) { radarNote = `radar volume unavailable: ${e.data.error}`; return; }
+      radarKey = e.data.id; radar = e.data.vol; radarNote = '';
+      rebuild();
+    };
+    worker.onerror = (e) => { radarBusy = false; radarNote = `radar decoder failed: ${e.message}`; };
+    worker.postMessage({ id, url: `${BUCKET}/${key}`, grid: { ...RADAR_GRID, lat: launch.pad.lat, lon: launch.pad.lon } });
+  } catch (e) { radarBusy = false; radarNote = `radar volume unavailable: ${e.message}`; }
+}
+
 function buildClouds(g) {
   const h3 = VOL.top * ex;
   box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(VOL.half * 2, h3, VOL.half * 2)), new THREE.LineBasicMaterial({ color: 0x55585e, transparent: true, opacity: 0.6 }));
   box.position.y = h3 / 2; g.add(box);
-  g.add(label('cloud volume 300 × 300 × 16 km', new THREE.Vector3(VOL.half, h3, -VOL.half), { color: '#898781', size: 10 }));
+  g.add(label('radar & cloud volume 300 × 300 × 16 km', new THREE.Vector3(VOL.half, h3, -VOL.half), { color: '#898781', size: 10 }));
   if (!cloud) return;
-  const tex = new THREE.Data3DTexture(cloud.data, VOL.N, VOL.N, VOL.NZ);
+  const tex = new THREE.Data3DTexture(cloud.data.slice(), VOL.N, VOL.N, VOL.NZ);
   tex.format = THREE.RedFormat; tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.unpackAlignment = 1; tex.needsUpdate = true;
   cloudMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.ShaderMaterial({
     glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: FRAG, side: THREE.BackSide, transparent: true, depthWrite: false,
@@ -222,6 +319,7 @@ function buildClouds(g) {
       sun: { value: new THREE.Vector3(0.35, 0.8, -0.3).normalize().multiply(new THREE.Vector3(1 / (VOL.half * 2), 1 / VOL.top, 1 / (VOL.half * 2))).normalize() } },
   }));
   cloudMesh.scale.set(VOL.half * 2, h3, VOL.half * 2); cloudMesh.position.y = h3 / 2; cloudMesh.renderOrder = 5;
+  cloudMesh.visible = $('v3Clouds').checked;
   g.add(cloudMesh);
 }
 
@@ -257,10 +355,10 @@ async function loadClouds() {
 
 function rebuild() {
   if (!scene || !launch || launch.pad.lat == null) return;
-  if (root) { scene.remove(root); root.traverse((o) => { o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.uniforms?.map?.value.dispose(); o.material.dispose(); } }); }
-  root = new THREE.Group(); cloudMesh = null;
+  if (root) { scene.remove(root); root.traverse((o) => { o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.uniforms?.map?.value.dispose(); o.material.uniforms?.lut?.value.dispose(); o.material.dispose(); } }); }
+  root = new THREE.Group(); cloudMesh = null; radarMesh = null;
   root.add(ground(5, 5, -0.4), ground(8, 5, 0));
-  buildAscent(root); buildPole(root); buildClouds(root);
+  buildAscent(root); buildPole(root); buildClouds(root); buildRadar(root);
   marker = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffffff })); marker.userData.fixed = 0.011;
   markerDrop = line([new THREE.Vector3(), new THREE.Vector3()], 0xffffff, 0.5);
   root.add(marker, markerDrop);
@@ -278,8 +376,8 @@ function view(name) {
   } else if (name === 'top') {
     controls.target.set(0, 0, 0); camera.position.set(0, 620, 1);
   } else {
-    controls.target.set(0, 6 * ex, 0);
-    camera.position.copy(controls.target).addScaledVector(side, 300).addScaledVector(along, -190).add(new THREE.Vector3(0, 60 + 12 * ex, 0));
+    controls.target.set(0, 4 * ex, 0);
+    camera.position.copy(controls.target).addScaledVector(side, 210).addScaledVector(along, -130).add(new THREE.Vector3(0, 70 + 12 * ex, 0));
   }
   controls.update();
 }
@@ -301,6 +399,7 @@ function frame(ms) {
   renderer.render(scene, camera);
   const L = cloud?.layers;
   $('v3Readout').textContent = `vehicle  T+${String(Math.round(t)).padStart(3)} s\naltitude ${num(spline(1, t), 1).padStart(6)} km  ${num(spline(1, t) * 3.281).padStart(4)} kft\ndownrange${num(spline(2, t), 1).padStart(6)} km\nazimuth  ${heading()}°${launch.heading == null ? ' (assumed)' : ''}\n` +
+    (radar ? `radar    ${new Date(radar.time).toISOString().slice(11, 19)}Z  ${Math.max(0, Math.round((now() - radar.time) / 6e4))} min old  VCP ${radar.site.vcp}\n         ${radar.tilts.length} tilts ${radar.tilts[0]}°–${radar.tilts[radar.tilts.length - 1]}°\n         max ${num(radar.maxDbz)} dBZ at ${num(radar.maxKm, 1)} km · tops ${num(radar.echoTop * 3.281)} kft\n` : radarNote + '\n') +
     (L ? `cloud max low ${num(L.low)}%  mid ${num(L.mid)}%  high ${num(L.high)}%${L.low + L.mid + L.high < 3 ? '\nmodel shows clear skies in the volume' : ''}` : 'cloud model unavailable');
 }
 
@@ -323,13 +422,19 @@ export function init(getT) {
   $('v3Exag').addEventListener('input', (e) => { ex = +e.target.value; $('v3ExagOut').textContent = `${ex}×`; rebuild(); view(lastView); });
   $('v3Dens').addEventListener('input', (e) => { if (cloudMesh) cloudMesh.material.uniforms.dens.value = +e.target.value; });
   $('v3T').addEventListener('input', () => { $('v3Follow').checked = false; });
-  $('v3Legend').replaceChildren(
+  $('v3Radar').addEventListener('change', (e) => { if (radarMesh) radarMesh.visible = e.target.checked; if (e.target.checked) loadRadar(); });
+  $('v3Clouds').addEventListener('change', (e) => { if (cloudMesh) cloudMesh.visible = e.target.checked; });
+  $('v3MinDbz').addEventListener('input', (e) => { $('v3MinOut').textContent = e.target.value; if (radarMesh) radarMesh.material.uniforms.minDbz.value = +e.target.value; });
+  $('v3RadOp').addEventListener('input', (e) => { if (radarMesh) radarMesh.material.uniforms.opacity.value = +e.target.value; });
+  const bar = h('span', { class: 'dbz' }, 'Radar dBZ 5', h('b', { style: `background:linear-gradient(90deg,${DBZ_COLORS.map((c, i) => `${c} ${i / 15 * 100}% ${(i + 1) / 15 * 100}%`).join(',')})` }), '75 · KMLB Level II, all tilts, resampled to a 1.6 km × 0.4 km grid');
+  $('v3Legend').replaceChildren(bar,
     h('span', {}, h('i', { style: 'background:#fab219' }), 'Modelled ascent corridor: generic two-stage profile flown along the published azimuth, not provider trajectory data'),
     h('span', {}, h('i', { style: 'background:#f0efec' }), 'Clouds: forecast-model cloud fraction on 14 pressure levels, ray-marched; fine texture is synthetic'),
     h('span', {}, h('i', { style: 'background:#7fb2f5' }), 'Wind arrows over the pad point downwind, length by speed'),
     h('span', {}, 'Drag to orbit, scroll to zoom, right-drag to pan.'));
   onWx(() => { if (shown && launch) { loadClouds(); } });
   setInterval(() => shown && loadClouds(), 15 * 6e4);
+  setInterval(() => shown && loadRadar(), 2 * 6e4);
 }
 
 export function setLaunch(l) {
@@ -337,12 +442,12 @@ export function setLaunch(l) {
   launch = l;
   if (!scene || l.pad.lat == null || !moved) return;
   cloudKey = ''; rebuild(); view($('v3View').value);
-  if (shown) loadClouds();
+  if (shown) { loadClouds(); loadRadar(); }
 }
 
 export function show() {
   if (shown) return; shown = true;
-  loadClouds(); rebuild();
+  loadClouds(); loadRadar(); rebuild();
   raf = requestAnimationFrame(frame);
 }
 export function hide() { shown = false; cancelAnimationFrame(raf); }

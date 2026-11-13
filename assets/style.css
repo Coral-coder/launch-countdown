@@ -217,3 +217,4 @@ footer { max-width: 1500px; margin: 0 auto; padding: 16px; color: var(--muted); 
 .dlg-preview.bad { color: #ff8a8a; }
 
 .panel[data-tab=countdown].on { height: 100%; }
+.dbz { display: inline-flex; align-items: center; gap: 6px; } .dbz b { display: inline-block; width: 160px; height: 8px; border-radius: 2px; } .legend-row .dbz i { display: none; }

@@ -6,6 +6,7 @@ A static GitHub Pages site that counts down to the next launch from Cape Canaver
 
 Each section is its own tab; nothing scrolls as one long page. **Slideshow** (`P`) cycles through the tabs on a timer you set in seconds, and the **Tabs** menu picks which ones it visits. Arrow keys step between tabs. The site reloads itself when a new version is deployed and re-reads launch data every minute; an entered T-0 survives both unless the source publishes a new one.
 
+- **Volumetric radar** (3D tab): the browser downloads the newest KMLB Level II volume from the public NEXRAD archive on AWS, decodes every reflectivity tilt in a web worker, resamples it to a 192 × 192 × 40 grid around the pad and ray-marches it with the NWS colour scale. It checks for a new volume every two minutes; volumes arrive roughly 5 to 8 minutes after the scan starts.
 - **3D Ascent & Clouds**: a WebGL scene with a modelled ascent corridor along the published azimuth, a ray-marched cloud volume (300 × 300 × 16 km) built from forecast-model cloud fraction on 14 pressure levels, the wind profile over the pad, the freezing level, and a vehicle marker that follows the clock after liftoff. The corridor is a generic two-stage profile, not provider trajectory data, and the fine cloud texture is synthetic.
 
 - **Countdown** to T-0 in days, hours, minutes, seconds and milliseconds, with **HOLD**, **SCRUB** and **RESET** controls in the top bar (`H` toggles a hold).
