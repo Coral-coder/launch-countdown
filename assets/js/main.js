@@ -10,6 +10,9 @@ let data = null, launches = [], current = null, cd = null;
 
 const prep = (l) => ({ ...l, netMs: parseT(l.net), openMs: parseT(l.window_open), closeMs: parseT(l.window_close) });
 
+/** No usable T-0: the listing has only a placeholder date and the operator has not entered a time. */
+const noT0 = () => current.time_tbd && cd?.s.t0 == null;
+
 async function loadData() {
   try {
     data = await getJSON('Launch data (Next Spaceflight + Launch Library)', `data/launches.json?t=${Date.now()}`, { keep: false });
@@ -36,7 +39,7 @@ function select(id, push = true) {
   if (!unchanged) renderLaunch();
   renderControls(); renderSchedule();
   if (l.pad.lat != null) {
-    weather.setTarget({ lat: l.pad.lat, lon: l.pad.lon, t0: cd.t0, tbd: l.time_tbd, heading: l.heading, goPct: l.weather_go_pct });
+    weather.setTarget({ lat: l.pad.lat, lon: l.pad.lon, t0: cd.t0, tbd: noT0(), heading: l.heading, goPct: l.weather_go_pct });
     if (!same) showLaunch(l, launches);
   }
 }
@@ -48,20 +51,20 @@ const set = (node, text) => { if (node.textContent !== text) node.textContent = 
 
 function state() {
   const official = current.status?.name || '';
-  if (current.time_tbd) return ['tbd', 'NO FIRM T-0', `AWAITING A LAUNCH TIME · ${official.toUpperCase()}`];
+  if (noT0()) return ['tbd', 'NO FIRM T-0', `AWAITING A LAUNCH TIME · ${official.toUpperCase()}`];
   if (cd.mode === 'scrub') return ['scrub', 'SCRUBBED', `SCRUBBED AT ${label(cd.t).slice(0, -4)} · ${dur(cd.heldFor)} AGO`];
   if (cd.mode === 'hold') return ['hold', 'HOLD', `HOLD · HOLDING AT ${label(cd.t).slice(0, -4)} · HELD ${dur(cd.heldFor)}`];
   const over = current.closeMs && cd.t0 > current.closeMs + 999 ? ' · PAST WINDOW CLOSE' : '';
   if (cd.t >= 0) return ['flight', cd.t < 36e5 ? 'LIFTOFF' : official.toUpperCase() || 'LAUNCHED', (cd.t < 36e5 ? 'LIFTOFF · MISSION ELAPSED TIME' : `T-0 PASSED · ${official.toUpperCase()}`) + over];
   if (/hold/i.test(official)) return ['hold', 'OFFICIAL HOLD', 'COUNTING LOCALLY · OFFICIAL STATUS: HOLD' + over];
   if (/scrub/i.test(official)) return ['scrub', 'OFFICIAL SCRUB', 'OFFICIAL STATUS: SCRUB · AWAITING NEW T-0'];
-  return ['go', /^go/i.test(official) ? 'GO' : 'COUNTING', (/^go/i.test(official) ? 'GO FOR LAUNCH · COUNTING' : `COUNTING · ${official.toUpperCase()}`) + (cd.slipped ? ` · T-0 SLIPPED ${dur(cd.slipped)}` : '') + over];
+  return ['go', /^go/i.test(official) ? 'GO' : 'COUNTING', (/^go/i.test(official) ? 'GO FOR LAUNCH · COUNTING' : `COUNTING · ${official.toUpperCase()}`) + (current.time_tbd ? ' · T-0 ENTERED MANUALLY' : cd.slipped ? ` · T-0 ${cd.slipped > 0 ? 'SLIPPED' : 'MOVED UP'} ${dur(cd.slipped)}` : '') + over];
 }
 
 function tick() {
   requestAnimationFrame(tick);
   if (!cd) return;
-  if (current.time_tbd) {
+  if (noT0()) {
     set(el.sign, 'T-'); [el.d, el.hh, el.mm, el.ss].forEach((n) => set(n, '--')); set(el.ms, '.---');
   } else {
     const p = parts(cd.t);
@@ -76,7 +79,7 @@ function tick() {
 }
 
 function renderControls() {
-  const hold = $('btnHold'), scrub = $('btnScrub'), tbd = current.time_tbd;
+  const hold = $('btnHold'), scrub = $('btnScrub'), tbd = noT0();
   hold.textContent = cd.mode === 'hold' ? 'RESUME' : 'HOLD';
   hold.classList.toggle('active', cd.mode === 'hold');
   hold.disabled = tbd || cd.mode === 'scrub';
@@ -84,12 +87,13 @@ function renderControls() {
   scrub.classList.toggle('active', cd.mode === 'scrub');
   scrub.disabled = tbd;
   $('btnReset').disabled = tbd || (cd.mode === 'run' && !cd.slipped);
+  $('btnSetT0').disabled = false;
   [hold, scrub, $('btnReset')].forEach((b) => { b.style.opacity = b.disabled ? 0.4 : 1; });
   $('log').replaceChildren(...(cd.s.log.length ? cd.s.log.map((e) => h('div', {}, h('time', {}, utc(e.t)), e.event))
-    : [h('div', { class: 'note' }, 'Nothing yet. HOLD freezes the T clock and slips T-0 when you resume; SCRUB stops the attempt until you recycle.')]));
+    : [h('div', { class: 'note' }, 'Nothing yet. HOLD freezes the T clock and slips T-0 when you resume; SET T-0 enters a new time; SCRUB stops the attempt until you recycle.')]));
   // A slipped T-0 changes which forecast hour matters.
   if (current.pad.lat != null && weather.wx.target && weather.wx.target.t0 !== cd.t0 && cd.mode === 'run') {
-    weather.setTarget({ ...weather.wx.target, t0: cd.t0 });
+    weather.setTarget({ ...weather.wx.target, t0: cd.t0, tbd: noT0() });
   }
   renderFacts();
 }
@@ -97,7 +101,70 @@ function renderControls() {
 $('btnHold').addEventListener('click', () => (cd.mode === 'hold' ? cd.resume() : cd.hold()));
 $('btnScrub').addEventListener('click', () => (cd.mode === 'scrub' ? cd.reset('Recycled: counting toward the published T-0') : cd.scrub()));
 $('btnReset').addEventListener('click', () => cd.reset());
+
+// ---- operator-entered T-0
+const dlg = $('t0Dialog'), t0In = $('t0Input'), t0Zone = $('t0Zone');
+/** Offset (ms) of an IANA zone from UTC at an instant. */
+function zoneOffset(ms, tz) {
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+  const p = Object.fromEntries(f.formatToParts(ms).map((x) => [x.type, +x.value]));
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(ms / 1000) * 1000;
+}
+/** "YYYY-MM-DDTHH:MM[:SS]" typed in the chosen zone -> epoch ms. */
+function fromField(v, tz) {
+  const m = /^(\d+)-(\d+)-(\d+)T(\d+):(\d+)(?::(\d+))?/.exec(v);
+  if (!m) return null;
+  const [y, mo, d, hh, mi, ss] = m.slice(1).map((x) => +x || 0);
+  if (tz === 'local') return new Date(y, mo - 1, d, hh, mi, ss).getTime();
+  const guess = Date.UTC(y, mo - 1, d, hh, mi, ss);
+  return tz === 'UTC' ? guess : guess - zoneOffset(guess - zoneOffset(guess, tz), tz);
+}
+function toField(ms, tz) {
+  const off = tz === 'local' ? -new Date(ms).getTimezoneOffset() * 6e4 : tz === 'UTC' ? 0 : zoneOffset(ms, tz);
+  return new Date(Math.floor(ms / 1000) * 1000 + off).toISOString().slice(0, 19);
+}
+function previewT0() {
+  const ms = fromField(t0In.value, t0Zone.value), pv = $('t0Preview');
+  const ok = ms != null && !Number.isNaN(ms);
+  $('t0Apply').disabled = !ok;
+  pv.className = 'dlg-preview' + (ok ? '' : ' bad');
+  if (!ok) { pv.textContent = 'Enter a date and time.'; return; }
+  const d = ms - cd.t0, notes = [];
+  if (ms <= now()) notes.push('This time has already passed: the clock will show T+.');
+  if (current.closeMs && ms > current.closeMs + 999) notes.push(`Past the published window close (${utc(current.closeMs)}).`);
+  if (current.openMs && ms < current.openMs - 999) notes.push(`Before the published window opens (${utc(current.openMs)}).`);
+  pv.textContent = `${utc(ms)}  ·  ${eastern(ms)}\n${d === 0 ? 'Same as the current T-0' : `${d > 0 ? 'Slips' : 'Moves up'} ${dur(d)} from the current T-0`}  ·  ${ms > now() ? 'T-' + dur(ms - now()) + ' from now' : ''}` +
+    (notes.length ? '\n' + notes.join(' ') : '');
+}
+function openT0() {
+  if (!cd || dlg.open) return;
+  // Coming out of a hold, start from where a plain resume would put T-0.
+  const start = cd.mode === 'hold' ? now() - cd.t : cd.t0;
+  $('t0Current').textContent = `${current.name} · current T-0 ${utc(cd.t0)}` + (cd.mode !== 'run' ? ` · clock is in ${cd.mode.toUpperCase()}; setting a T-0 releases it` : '');
+  t0In.value = toField(start, t0Zone.value);
+  previewT0(); dlg.showModal(); t0In.focus();
+}
+$('btnSetT0').addEventListener('click', openT0);
+$('t0Cancel').addEventListener('click', () => dlg.close());
+t0In.addEventListener('input', previewT0);
+t0Zone.addEventListener('change', (e) => {
+  // keep the same instant when switching zones
+  const prev = e.target.dataset.prev || 'UTC', ms = fromField(t0In.value, prev);
+  if (ms != null) t0In.value = toField(ms, t0Zone.value);
+  e.target.dataset.prev = t0Zone.value; previewT0();
+});
+$('t0Quick').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const m = b.dataset.m, base = fromField(t0In.value, t0Zone.value) ?? cd.t0;
+  const ms = m === 'pub' ? current.netMs : m === 'close' ? (current.closeMs || current.netMs) : base + +m * 6e4;
+  t0In.value = toField(ms, t0Zone.value); previewT0();
+});
+$('t0Form').addEventListener('submit', () => {
+  const ms = fromField(t0In.value, t0Zone.value);
+  if (ms != null && !Number.isNaN(ms)) cd.setT0(ms);
+});
 document.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 't' && !e.metaKey && !e.ctrlKey && !e.altKey && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && !$('btnSetT0').disabled) { e.preventDefault(); openT0(); return; }
   if (e.key.toLowerCase() !== 'h' || e.metaKey || e.ctrlKey || e.altKey || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if (!$('btnHold').disabled) $('btnHold').click();
 });
@@ -110,7 +177,7 @@ const fact = (k, v, s) => h('div', { class: 'fact' }, h('div', { class: 'k' }, k
 function renderFacts() {
   if (!cd) return;
   const l = current, t = now(), out = [];
-  if (l.time_tbd) {
+  if (noT0()) {
     out.push(fact('No earlier than', new Date(l.netMs).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }), 'placeholder date, no time published'));
   } else {
     out.push(fact('T-0 (UTC)', utc(cd.t0), cd.slipped ? `published ${utc(l.netMs)}` : l.time_precise ? 'published time' : 'time may still move'),
@@ -149,9 +216,9 @@ function timelineItems() {
 }
 
 function renderTimeline() {
-  const items = timelineItems(), t = current.time_tbd ? -Infinity : cd.t;
+  const items = timelineItems(), t = noT0() ? -Infinity : cd.t;
   const next = items.find((i) => i.t > t);
-  $('nextEvent').replaceChildren(...(next && !current.time_tbd ? ['Next: ', h('b', {}, next.name), ` at ${label(next.t).slice(0, -4)} · in ${dur(next.t - t)}`] : []));
+  $('nextEvent').replaceChildren(...(next && !noT0() ? ['Next: ', h('b', {}, next.name), ` at ${label(next.t).slice(0, -4)} · in ${dur(next.t - t)}`] : []));
   $('timeline').replaceChildren(...(items.length ? items.map((i) => h('div', { class: 'tl' + (i.t <= t ? ' done' : i === next ? ' next' : '') },
     h('span', { class: 't' }, label(i.t).slice(0, -4)), h('span', {}, i.name)))
     : [h('div', { class: 'note' }, 'No countdown timeline has been published for this launch.')]));

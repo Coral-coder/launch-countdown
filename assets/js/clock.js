@@ -94,6 +94,15 @@ export class Countdown {
     this.commit();
   }
 
+  /** Count toward an operator-entered T-0, releasing any hold or scrub. */
+  setT0(ms) {
+    const was = this.s.mode, old = this.t0;
+    Object.assign(this.s, { mode: 'run', frozen: null, since: null, t0: Math.round(ms) === this.net ? null : Math.round(ms) });
+    const d = Math.round((ms - old) / 1000);
+    this.log(`New T-0 set: ${new Date(ms).toISOString()} (${d >= 0 ? '+' : '-'}${Math.abs(d)} s)` + (was !== 'run' ? `; released from ${was}` : ''));
+    this.commit();
+  }
+
   /** Clear a hold/scrub and any slip: back to counting toward the published T-0. */
   reset(why = 'Clock reset to published T-0') {
     Object.assign(this.s, { mode: 'run', frozen: null, since: null, t0: null });

@@ -179,3 +179,19 @@ footer { max-width: 1500px; margin: 0 auto; padding: 16px; color: var(--muted); 
   .tabs { top: 96px; } html { scroll-padding-top: 150px; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* ---------- set T-0 dialog ---------- */
+.dlg { background: var(--surface); color: var(--ink); border: 1px solid var(--axis); border-radius: 12px; padding: 18px 20px; width: min(560px, calc(100vw - 32px)); }
+.dlg::backdrop { background: rgba(0,0,0,.6); }
+.dlg h2 { font-size: 16px; margin-bottom: 4px; }
+.dlg p { margin: 0 0 12px; }
+.dlg-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 12px; }
+.dlg-row.end { justify-content: flex-end; margin: 4px 0 0; }
+.dlg label { display: grid; gap: 4px; font-size: 12px; color: var(--ink2); flex: 1 1 180px; }
+.dlg input { background: var(--raised); color: var(--ink); border: 1px solid var(--border); border-radius: 6px; padding: 7px 8px; font: 15px var(--mono); color-scheme: dark; min-width: 0; }
+.dlg-row.quick { align-items: center; gap: 6px; }
+.dlg-row.quick .muted { flex-basis: 100%; }
+.dlg-row.quick button { background: var(--raised); color: var(--ink); border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; cursor: pointer; font: 12px var(--sans); }
+.dlg-row.quick button:hover { border-color: var(--info); }
+.dlg-preview { font: 13px var(--mono); color: var(--ink2); min-height: 3.2em; white-space: pre-line; }
+.dlg-preview.bad { color: #ff8a8a; }

@@ -17,6 +17,7 @@
   <div class="controls">
     <button id="btnHold" class="btn hold" title="Pause the count (H)">HOLD</button>
     <button id="btnScrub" class="btn scrub" title="Scrub this attempt">SCRUB</button>
+    <button id="btnSetT0" class="btn ghost" title="Enter a new T-0 (T)">SET T-0</button>
     <button id="btnReset" class="btn ghost" title="Return the clock to the published T-0">RESET</button>
   </div>
   <div class="utc"><span id="utcClock">--:--:--</span> UTC</div>
@@ -168,6 +169,29 @@
   Open-Meteo, NOAA CO-OPS, NOAA SWPC, NASA GIBS, RainViewer. Not an official source — never use for safety decisions.
 </footer>
 
+<dialog id="t0Dialog" class="dlg">
+  <form method="dialog" id="t0Form">
+    <h2>Set a new T-0</h2>
+    <p class="muted" id="t0Current"></p>
+    <div class="dlg-row">
+      <label>New T-0 <input type="datetime-local" id="t0Input" step="1" required></label>
+      <label>Time zone
+        <select id="t0Zone"><option value="UTC">UTC</option><option value="America/New_York">Eastern (Cape)</option><option value="local">My local time</option></select>
+      </label>
+    </div>
+    <div class="dlg-row quick" id="t0Quick">
+      <span class="muted">Slip from current T-0:</span>
+      <button type="button" data-m="1">+1 min</button><button type="button" data-m="5">+5</button><button type="button" data-m="10">+10</button>
+      <button type="button" data-m="30">+30</button><button type="button" data-m="60">+1 h</button><button type="button" data-m="1440">+24 h</button>
+      <button type="button" data-m="-1">−1 min</button><button type="button" data-m="pub">Published</button><button type="button" data-m="close">Window close</button>
+    </div>
+    <p id="t0Preview" class="dlg-preview"></p>
+    <div class="dlg-row end">
+      <button type="button" class="btn ghost" id="t0Cancel">CANCEL</button>
+      <button type="submit" class="btn hold" id="t0Apply">SET T-0 &amp; COUNT</button>
+    </div>
+  </form>
+</dialog>
 <div id="tip" class="tip" hidden></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module" src="assets/js/main.js"></script>

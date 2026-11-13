@@ -6,6 +6,7 @@ A static GitHub Pages site that counts down to the next launch from Cape Canaver
 
 - **Countdown** to T-0 in days, hours, minutes, seconds and milliseconds, with **HOLD**, **SCRUB** and **RESET** controls in the top bar (`H` toggles a hold).
   - HOLD freezes the T clock. RESUME picks the count up where it stopped, so T-0 slips by the length of the hold.
+  - SET T-0 (`T`) opens a dialog to enter a new T-0 in UTC, Eastern or local time, or slip the current one by a preset amount. It works at any time, releases a hold or scrub, and gives undated launches a clock.
   - SCRUB stops the attempt; RECYCLE returns to the published T-0.
   - The state is saved per launch in the browser, and every action is written to the controller log. It is a local control: it does not change the published launch status, which is shown next to it.
 - **Launch details** from Next Spaceflight (mission, vehicle, pad, recovery, statistics, countdown timeline, webcast), enriched with Launch Library 2 (updates, boosters, crew, programme).
