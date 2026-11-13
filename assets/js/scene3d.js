@@ -134,10 +134,10 @@ function buildPole(g) {
   if (!prof) return;
   let last = -9;
   for (const l of prof.levels) {
-    if (l.kt == null || l.dir == null || l.z == null || l.z > top * 1000 || l.kt < 1) continue;
+    if (!$('v3WindLbl').checked || l.kt == null || l.dir == null || l.z == null || l.z > top * 1000 || l.kt < 1) continue;
     const to = rad(l.dir + 180), dir = new THREE.Vector3(Math.sin(to), 0, -Math.cos(to)), len = Math.max(3, l.kt * 0.5);
     g.add(new THREE.ArrowHelper(dir, new THREE.Vector3(0, l.z / 1000 * ex, 0), len, WIND, Math.min(4, len * 0.3), Math.min(2, len * 0.15)));
-    if ($('v3WindLbl').checked && l.z / 1000 - last > 2.6) { last = l.z / 1000; g.add(label(`${Math.round(l.kt)} kt ${compass(l.dir)}`, dir.clone().multiplyScalar(len + 1).setY(l.z / 1000 * ex), { color: '#9cc3f7', size: 10 })); }
+    if (l.z / 1000 - last > 2.6) { last = l.z / 1000; g.add(label(`${Math.round(l.kt)} kt ${compass(l.dir)}`, dir.clone().multiplyScalar(len + 1).setY(l.z / 1000 * ex), { color: '#9cc3f7', size: 10 })); }
   }
   if (prof.levels.some((l) => l.t != null)) {
     const fz = prof.levels.find((l, i, a) => i && l.t <= 0 && a[i - 1].t > 0);
@@ -192,8 +192,9 @@ void main() {
   hit.x = max(hit.x, 0.0);
   // Fixed-length steps on shells centred on the camera: neighbouring pixels sample the same
   // depths, so the picture does not shimmer as the camera orbits.
-  const int STEPS = 150;
-  float dt = max(0.008, (hit.y - hit.x) / float(STEPS)), T = 1.0;
+  const int STEPS = 230;
+  const float dt = 0.0078; // same step for every ray, or neighbouring pixels sample different depths and the picture crawls
+  float T = 1.0;
   float t = ceil(hit.x / dt) * dt;
   vec3 p = vOrigin + d * t, col = vec3(0.0);
   float kmPerUnit = length(d * size);
@@ -243,8 +244,9 @@ void main() {
   vec2 hit = hitBox(vOrigin, d);
   if (hit.x > hit.y) discard;
   hit.x = max(hit.x, 0.0);
-  const int STEPS = 200;
-  float dt = max(0.006, (hit.y - hit.x) / float(STEPS)), T = 1.0, km = length(d * size) * dt;
+  const int STEPS = 300;
+  const float dt = 0.006;
+  float T = 1.0, km = length(d * size) * dt;
   float t = ceil(hit.x / dt) * dt;
   vec3 p = vOrigin + d * t, col = vec3(0.0);
   for (int i = 0; i < STEPS; i++) {
@@ -277,7 +279,7 @@ function buildRadar(g) {
   tex.format = THREE.RedFormat; tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.unpackAlignment = 1; tex.needsUpdate = true;
   const h3 = VOL.top * ex;
   radarMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.ShaderMaterial({
-    glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: RFRAG, side: THREE.BackSide, transparent: true, depthWrite: false,
+    glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: RFRAG, side: THREE.BackSide, transparent: true, depthWrite: false, depthTest: false,
     uniforms: { map: { value: tex }, lut: { value: dbzLut() }, size: { value: new THREE.Vector3(VOL.half * 2, VOL.top, VOL.half * 2) },
       minDbz: { value: +$('v3MinDbz').value }, opacity: { value: +$('v3RadOp').value } },
   }));
@@ -323,7 +325,7 @@ function buildClouds(g) {
   const tex = new THREE.Data3DTexture(cloud.data.slice(), VOL.N, VOL.N, VOL.NZ);
   tex.format = THREE.RedFormat; tex.minFilter = tex.magFilter = THREE.LinearFilter; tex.unpackAlignment = 1; tex.needsUpdate = true;
   cloudMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.ShaderMaterial({
-    glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: FRAG, side: THREE.BackSide, transparent: true, depthWrite: false,
+    glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: FRAG, side: THREE.BackSide, transparent: true, depthWrite: false, depthTest: false,
     uniforms: { map: { value: tex }, size: { value: new THREE.Vector3(VOL.half * 2, VOL.top, VOL.half * 2) }, dens: { value: +$('v3Dens').value }, time: { value: 0 },
       sun: { value: new THREE.Vector3(0.35, 0.8, -0.3).normalize().multiply(new THREE.Vector3(1 / (VOL.half * 2), 1 / VOL.top, 1 / (VOL.half * 2))).normalize() } },
   }));
@@ -367,9 +369,15 @@ function rebuild() {
   if (root) { scene.remove(root); root.traverse((o) => { o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.uniforms?.map?.value.dispose(); o.material.uniforms?.lut?.value.dispose(); o.material.dispose(); } }); }
   root = new THREE.Group(); cloudMesh = null; radarMesh = null;
   root.add(ground(5, 5, -0.4), ground(8, 5, 0));
-  buildAscent(root); buildPole(root); buildClouds(root); buildRadar(root);
+  const ascent = new THREE.Group();
+  buildAscent(ascent); buildPole(root); buildClouds(root); buildRadar(root);
+  // The corridor is drawn after the weather volumes and ignores depth, so it always reads through
+  // cloud and radar instead of popping in and out as the draw order changes.
+  ascent.traverse((o) => { if (o.material && !o.isSprite) { o.material.transparent = true; o.material.depthTest = false; o.renderOrder = 8; } });
+  root.add(ascent);
   marker = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffffff })); marker.userData.fixed = 0.011;
   markerDrop = line([new THREE.Vector3(), new THREE.Vector3()], 0xffffff, 0.5);
+  for (const o of [marker, markerDrop]) { o.material.transparent = true; o.material.depthTest = false; o.renderOrder = 9; }
   root.add(marker, markerDrop);
   root.add(label(launch.pad.name, new THREE.Vector3(1.5, 0.5, 0), { size: 12 }));
   scene.add(root);
@@ -468,7 +476,7 @@ function atmosphere(zKm) {
  */
 function telemetry(t) {
   const h = 1, alt = spline(1, t), dr = spline(2, t);
-  const vel = (tt) => [(spline(2, tt + h) - spline(2, Math.max(0, tt - h))) / (tt < h ? tt + h : 2 * h), (spline(1, tt + h) - spline(1, Math.max(0, tt - h))) / (tt < h ? tt + h : 2 * h)];
+  const vel = (tt) => tt <= 0 ? [0, 0] : [(spline(2, tt + h) - spline(2, Math.max(0, tt - h))) / (tt < h ? tt + h : 2 * h), (spline(1, tt + h) - spline(1, Math.max(0, tt - h))) / (tt < h ? tt + h : 2 * h)];
   const [vh, vv] = vel(t), v = Math.hypot(vh, vv);
   // acceleration over a 6 s span, which smooths the joins between profile segments
   const [h1, v1] = vel(Math.max(0, t - 3)), [h2, v2] = vel(t + 3), span = t < 3 ? t + 3 : 6;
