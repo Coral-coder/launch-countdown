@@ -23,6 +23,12 @@ Each section is its own tab; nothing scrolls as one long page. **Slideshow** (`P
 - **Commit-criteria watch**: an unofficial screen of the public data against the usual weather constraints.
 - **Raw data**: every record and feed the page has loaded, as JSON.
 
+## Windows screensaver
+
+`screensaver/` is a small WinForms program that shows the site full-screen in WebView2 as a `.scr`. Download the latest build from the [screensaver release](https://github.com/Coral-coder/launch-countdown/releases/tag/screensaver), extract the folder, right-click `LaunchCountdown.scr` and choose **Install**.
+
+It opens the site with `?screensaver=1&secs=20`, which forces the slideshow, hides the controls and skips the video tab. It does not keep the display awake: there is no video playback and no power request, so the Windows display timer applies as usual, and the screensaver's own timer (default 30 minutes, set under **Settings…**) switches the monitor off as well.
+
 ## How the data gets there
 
 Next Spaceflight does not allow cross-origin requests, so a GitHub Actions workflow (`.github/workflows/pages.yml`) runs `scripts/fetch_launches.py` about every ten minutes, writes `data/launches.json`, and deploys the site. The page re-reads that file every minute. All weather feeds are fetched live by the browser.

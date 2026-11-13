@@ -417,6 +417,7 @@ export function init(getT) {
   const size = () => { const w = el.clientWidth, ht = el.clientHeight; if (!w || !ht) return; renderer.setSize(w, ht, false); camera.aspect = w / ht; camera.updateProjectionMatrix(); };
   new ResizeObserver(size).observe(el); size();
 
+  if (document.body.classList.contains('saver')) $('v3Spin').checked = true;
   $('v3View').addEventListener('change', (e) => view(e.target.value));
   $('v3Time').addEventListener('change', loadClouds);
   $('v3Exag').addEventListener('input', (e) => { ex = +e.target.value; $('v3ExagOut').textContent = `${ex}×`; rebuild(); view(lastView); });

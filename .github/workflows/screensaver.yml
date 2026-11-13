@@ -1,0 +1,41 @@
+name: Build Windows screensaver
+
+on:
+  push:
+    branches: [main]
+    paths: ["screensaver/**", ".github/workflows/screensaver.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: dotnet build screensaver/LaunchCountdown.csproj -c Release -o out
+      - name: Package
+        shell: pwsh
+        run: |
+          Rename-Item out/LaunchCountdown.exe LaunchCountdown.scr
+          if (Test-Path out/LaunchCountdown.exe.config) { Rename-Item out/LaunchCountdown.exe.config LaunchCountdown.scr.config }
+          Remove-Item out/*.pdb, out/*.xml -ErrorAction SilentlyContinue
+          Copy-Item screensaver/INSTALL.txt out/
+          Get-ChildItem out -Recurse | Select-Object FullName, Length
+          Compress-Archive -Path out/* -DestinationPath LaunchCountdownScreensaver.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaunchCountdownScreensaver
+          path: LaunchCountdownScreensaver.zip
+      - name: Publish to the "screensaver" release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view screensaver 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create screensaver --title "Windows screensaver" --notes "Latest build of the Launch Countdown screensaver. Extract the zip, then right-click LaunchCountdown.scr and choose Install. See INSTALL.txt inside."
+          }
+          gh release upload screensaver LaunchCountdownScreensaver.zip --clobber

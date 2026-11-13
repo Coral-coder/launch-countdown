@@ -5,7 +5,16 @@ import { $, h } from './util.js';
 const KEY = 'launch-countdown:ui:v1';
 let ui = { secs: 20, on: false, skip: ['raw', 'updates'], tab: 'countdown' };
 try { ui = { ...ui, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { /* storage unavailable */ }
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(ui)); } catch { /* ignore */ } };
+const save = () => { if (SAVER) return; try { localStorage.setItem(KEY, JSON.stringify(ui)); } catch { /* ignore */ } };
+
+// Screensaver mode (?screensaver=1&secs=20): the slideshow always runs, the video tab is skipped so
+// nothing asks Windows to keep the display on, and nothing is written back to the saved settings.
+const params = new URLSearchParams(location.search);
+export const SAVER = params.has('screensaver');
+if (SAVER) {
+  ui = { ...ui, on: true, tab: 'countdown', secs: Math.min(600, Math.max(3, +params.get('secs') || ui.secs)), skip: ['live', 'raw', 'updates'] };
+  document.body.classList.add('saver');
+}
 
 let panels = [], onShow = () => {}, shownAt = performance.now();
 export const currentTab = () => ui.tab;
@@ -44,7 +53,7 @@ function setRunning(on) {
 
 export function initTabs(cb) {
   onShow = cb;
-  panels = [...document.querySelectorAll('.panel')];
+  panels = [...document.querySelectorAll('.panel')].filter((p) => !(SAVER && p.dataset.tab === 'live'));
   $('tabs').replaceChildren(...panels.map((p) => h('button', { role: 'tab', 'data-tab': p.dataset.tab, onclick: () => showTab(p.dataset.tab) }, p.dataset.label)));
   $('showTabs').replaceChildren(...panels.map((p) => {
     const box = h('input', { type: 'checkbox' }); box.checked = !ui.skip.includes(p.dataset.tab);

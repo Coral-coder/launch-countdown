@@ -5,7 +5,7 @@ import { $, h, esc, num, pad2, parts, dur, utc, eastern, local, ago, parseT, get
 import { Countdown, now, syncClock, clockOffset, label } from './clock.js';
 import * as weather from './wx.js';
 import { initMap, showLaunch, mapShown } from './map.js';
-import { initTabs, showTab, currentTab } from './tabs.js';
+import { initTabs, showTab, currentTab, SAVER } from './tabs.js';
 
 let data = null, launches = [], current = null, cd = null, scene3d = null;
 
@@ -259,7 +259,8 @@ function renderLaunch() {
   const vids = [[n.vid_url, 'Launch webcast'], [n.nsf_vid_url, 'NASASpaceflight stream'], ...(ll.vid_urls || []).map((v) => [v.url, v.title || v.publisher || 'Webcast']), [n.location_livestream, 'Launch site livestream']]
     .filter(([u], i, a) => u && a.findIndex((x) => x[0] === u) === i);
   const yt = vids.map(([u]) => youtubeId(u)).find(Boolean);
-  const vidKey = JSON.stringify(vids);
+  const vidKey = SAVER ? 'off' : JSON.stringify(vids);
+  if (SAVER) $('webcast').dataset.key = vidKey; // no video in screensaver mode: playback would hold the display awake
   if ($('webcast').dataset.key !== vidKey) $('webcast').replaceChildren(yt ? h('iframe', { src: `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1&mute=1&playsinline=1`, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '', title: 'Launch webcast' })
     : h('div', { class: 'empty' }, vids.length ? 'The published stream cannot be embedded here. Use the links below.' : 'No webcast link published yet.'));
   $('webcast').dataset.key = vidKey;
@@ -409,6 +410,7 @@ async function checkVersion() {
 
 // ---------------------------------------------------------------- boot
 
+if (!SAVER) $('padStream').src = $('padStream').dataset.src;
 initMap();
 weather.start();
 initTabs(tabShown);

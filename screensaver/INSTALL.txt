@@ -1,0 +1,22 @@
+Launch Countdown screensaver for Windows 10 / 11 (64-bit)
+
+Install
+  1. Extract this whole folder somewhere permanent, for example
+     C:\Program Files\LaunchCountdown  (all the files must stay together).
+  2. Right-click LaunchCountdown.scr and choose "Install".
+     Windows opens Screen Saver Settings with it selected.
+  3. Choose the wait time there. "Settings..." sets the seconds per tab and
+     how long before the screensaver switches the display off.
+
+Notes
+  - Needs the Microsoft Edge WebView2 runtime, which Windows 11 and current
+    Windows 10 already include.
+  - Move the mouse or press a key to leave the screensaver.
+  - The display still sleeps: the screensaver plays no video and makes no
+    power requests, so the Windows "turn off the display" timer applies as
+    usual, and its own timer (default 30 minutes) switches the monitor off too.
+  - Windows may warn that the file comes from an unknown publisher; it is
+    not code-signed.
+
+Remove
+  Pick a different screensaver in Screen Saver Settings, then delete the folder.
