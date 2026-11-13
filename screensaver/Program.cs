@@ -343,21 +343,14 @@ namespace LaunchCountdownSaver
 
     internal sealed class SaverForm : Form
     {
-        // Runs in every page: any real input ends the screensaver. The first moments are ignored
-        // because Windows delivers a stray mouse move when the window appears.
+        // Runs in every page: only Escape or the space bar ends the screensaver. The mouse is ignored.
         private const string ExitScript = @"(function () {
-  var x = null, y = null, born = Date.now();
-  function bye() { try { window.chrome.webview.postMessage('exit'); } catch (e) {} }
-  addEventListener('mousemove', function (e) {
-    if (x === null || Date.now() - born < 1500) { x = e.screenX; y = e.screenY; return; }
-    if (Math.abs(e.screenX - x) + Math.abs(e.screenY - y) > 12) bye();
+  addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' || e.key === ' ' || e.code === 'Space') { e.preventDefault(); try { window.chrome.webview.postMessage('exit'); } catch (x) {} }
   }, true);
-  ['mousedown', 'keydown', 'wheel', 'touchstart'].forEach(function (n) { addEventListener(n, bye, true); });
 })();";
 
         private readonly WebView2 web;
-        private DateTime quietUntil = DateTime.UtcNow.AddMilliseconds(1500);
-        private Point? mouseStart;
         private bool dark;
 
         public SaverForm(Rectangle bounds, bool primary)
@@ -370,9 +363,7 @@ namespace LaunchCountdownSaver
             TopMost = true;
             KeyPreview = true;
 
-            KeyDown += (o, e) => Close();
-            MouseDown += (o, e) => Close();
-            MouseMove += OnMouseMoved;
+            KeyDown += (o, e) => { if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.Space) Close(); };
 
             if (!primary) return;
             web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.Black };
@@ -390,7 +381,7 @@ namespace LaunchCountdownSaver
                     s.IsStatusBarEnabled = false;
                     s.AreBrowserAcceleratorKeysEnabled = false;
                     await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(ExitScript);
-                    web.CoreWebView2.WebMessageReceived += (s2, m) => { if (DateTime.UtcNow > quietUntil) Close(); };
+                    web.CoreWebView2.WebMessageReceived += (s2, m) => Close();
                     web.CoreWebView2.NewWindowRequested += (s2, n) => n.Handled = true;
                     web.CoreWebView2.Navigate(Settings.SaverUrl());
                 }
@@ -412,8 +403,6 @@ namespace LaunchCountdownSaver
         public void GoDark()
         {
             dark = true;
-            mouseStart = null;
-            quietUntil = DateTime.UtcNow.AddSeconds(3); // the monitor switching off can produce a stray mouse event
             if (web == null) return;
             try { if (web.CoreWebView2 != null) web.CoreWebView2.Navigate("about:blank"); } catch { }
             web.Visible = false;
@@ -422,19 +411,11 @@ namespace LaunchCountdownSaver
         /// <summary>Bring the page back after GoDark, for the launch window.</summary>
         public void Wake()
         {
-            mouseStart = null;
-            quietUntil = DateTime.UtcNow.AddSeconds(3); // ignore the pointer nudge that woke the display
             if (!dark) return;
             dark = false;
             if (web == null) return;
             web.Visible = true;
             try { if (web.CoreWebView2 != null) web.CoreWebView2.Navigate(Settings.SaverUrl()); } catch { }
-        }
-
-        private void OnMouseMoved(object sender, MouseEventArgs e)
-        {
-            if (DateTime.UtcNow < quietUntil || mouseStart == null) { mouseStart = e.Location; return; }
-            if (Math.Abs(e.X - mouseStart.Value.X) + Math.Abs(e.Y - mouseStart.Value.Y) > 12) Close();
         }
     }
 

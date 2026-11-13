@@ -11,7 +11,7 @@ Install
 Notes
   - Needs the Microsoft Edge WebView2 runtime, which Windows 11 and current
     Windows 10 already include.
-  - Move the mouse or press a key to leave the screensaver.
+  - Press Escape or the space bar to leave the screensaver. The mouse is ignored.
   - The display still sleeps: the screensaver plays no video and makes no
     power requests, so the Windows "turn off the display" timer applies as
     usual, and its own timer (default 30 minutes) switches the monitor off too.

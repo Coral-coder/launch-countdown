@@ -304,8 +304,8 @@ async function loadRadar() {
       if (keys.length) { key = keys[keys.length - 1]; break; }
     }
     if (!key) throw new Error('no volumes listed');
-    const id = `${key}|${launch.pad.lat},${launch.pad.lon}`;
-    if (id === radarKey) { radarBusy = false; return; }
+    const job = `${key}|${launch.pad.lat},${launch.pad.lon}`;
+    if (job === radarKey) { radarBusy = false; return; }
     if (!radar) radarNote = 'radar volume downloading and decoding…';
     worker = worker || new Worker(new URL('./radar-worker.js', import.meta.url));
     worker.onmessage = (e) => {
@@ -315,7 +315,7 @@ async function loadRadar() {
       rebuild();
     };
     worker.onerror = (e) => { radarBusy = false; radarNote = `radar decoder failed: ${e.message}`; };
-    worker.postMessage({ id, url: `${BUCKET}/${key}`, grid: { ...RADAR_GRID, lat: launch.pad.lat, lon: launch.pad.lon } });
+    worker.postMessage({ id: job, url: `${BUCKET}/${key}`, grid: { ...RADAR_GRID, lat: launch.pad.lat, lon: launch.pad.lon } });
   } catch (e) { radarBusy = false; radarNote = `radar volume unavailable: ${e.message}`; }
 }
 
@@ -367,6 +367,131 @@ async function loadClouds() {
 
 // ---------------------------------------------------------------- scene lifecycle
 
+// ---------------------------------------------------------------- aircraft, vessels and hazard areas
+
+// Snapshots written by the deploy workflow (scripts/fetch_traffic.py): the sources cannot be read
+// from a browser, so positions are a few minutes old and are dead-reckoned forward from there.
+const AIR = 0x5fd0ff, SEA = 0x6fe36f, NOTAM = 0xffd21f, NOTMAR = 0xff5a36;
+const TRACK_CAP_KM = 25;      // a projected track is never drawn longer than this
+const TRAFFIC_KM = 220;       // only traffic this close to the pad is drawn
+const STALE_MIN = 20;         // aircraft older than this are dropped; vessels move slowly enough to keep
+let traffic = null, hazards = null, trafficGroup = null, movers = [], trafficNote = 'traffic snapshot loading…', lastMove = 0;
+
+const kmBetween = (a, b, c, d) => { const x = rad(d - b) * Math.cos(rad((a + c) / 2)), y = rad(c - a); return Math.hypot(x, y) * R; };
+function inRing(lat, lon, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [yi, xi] = ring[i], [yj, xj] = ring[j];
+    if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+const hhmm = (iso) => (iso ? new Date(iso).toISOString().slice(11, 16) + 'Z' : '?');
+
+async function loadTraffic() {
+  if (!launch) return;
+  const get = async (name, file) => { try { return await getJSON(name, `data/${file}?t=${Date.now()}`, { keep: false }); } catch { return null; } };
+  [traffic, hazards] = await Promise.all([get('Aircraft and vessel snapshot', 'traffic.json'), get('Launch hazard areas', 'hazards.json')]);
+  buildTraffic();
+}
+
+/** Hazard areas that matter now: near this pad and not yet over. */
+function activeAreas() {
+  const t = now(), { lat, lon } = launch.pad;
+  return (hazards?.areas || []).filter((a) => (!a.to || Date.parse(a.to) > t) && a.rings.some((r) => kmBetween(lat, lon, r[0][0], r[0][1]) < 1500))
+    .map((a) => ({ ...a, live: (!a.from || Date.parse(a.from) - t < 2 * 36e5) }));
+}
+
+function buildTraffic() {
+  if (!root || !launch || launch.pad.lat == null) return;
+  if (trafficGroup) { root.remove(trafficGroup); trafficGroup.traverse((o) => { o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.dispose(); } }); }
+  trafficGroup = new THREE.Group(); movers = [];
+  root.add(trafficGroup);
+  const areas = activeAreas(), g = trafficGroup;
+
+  if ($('v3Haz').checked) {
+    for (const a of areas) {
+      const color = a.kind === 'notam' ? NOTAM : NOTMAR, dim = a.live ? 1 : 0.45;
+      const y0 = (a.floor_ft || 0) * 0.0003048 * ex, y1 = (a.kind === 'notam' ? Math.min(20, (a.ceil_ft ?? 65000) * 0.0003048) : 0.25) * ex;
+      for (const ring of a.rings) {
+        const xz = ring.map(([la, lo]) => proj(la, lo));
+        const loop = (y) => line([...xz, xz[0]].map(([x, z]) => new THREE.Vector3(x, y, z)), color, 0.9 * dim);
+        g.add(loop(y0 + 0.05), loop(y1));
+        const every = Math.max(1, Math.round(xz.length / 10));
+        xz.forEach(([x, z], i) => { if (i % every === 0) g.add(line([new THREE.Vector3(x, y0, z), new THREE.Vector3(x, y1, z)], color, 0.35 * dim)); });
+        const shape = new THREE.Shape(xz.map(([x, z]) => new THREE.Vector2(x, -z)));
+        const fill = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.1 * dim, side: THREE.DoubleSide, depthWrite: false }));
+        fill.rotation.x = -Math.PI / 2; fill.position.y = y0 + 0.06; g.add(fill);
+        g.add(label(`${a.kind === 'notam' ? 'NOTAM' : 'NOTMAR'} ${a.id} · ${hhmm(a.from)}–${hhmm(a.to)}${a.kind === 'notam' ? ` · to ${a.ceil_ft == null ? 'unlimited' : Math.round(a.ceil_ft / 100) * 100 + ' ft'}` : ''}`,
+          new THREE.Vector3(xz[0][0], y1, xz[0][1]), { color: a.kind === 'notam' ? '#ffe27a' : '#ff9a80', size: 10 }));
+      }
+    }
+  }
+
+  const snapAge = traffic ? (now() - Date.parse(traffic.generated_at)) / 6e4 : null;
+  const add = (v, sea) => {
+    const { lat, lon } = launch.pad;
+    if (v.lat == null || kmBetween(lat, lon, v.lat, v.lon) > TRAFFIC_KM) return;
+    if (!sea && (v.ground || (now() / 1000 - v.t) / 60 > STALE_MIN)) return;
+    const color = sea ? SEA : AIR;
+    const icon = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.5, sea ? 4 : 8), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false }));
+    icon.renderOrder = 7; icon.userData.fixed = 0.007;
+    const track = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.5, depthTest: false })); track.renderOrder = 7;
+    const ticks = [0, 1].map(() => { const m = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 8), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false })); m.userData.fixed = 0.0022; m.renderOrder = 7; return m; });
+    g.add(icon, track, ...ticks);
+    movers.push({ v, sea, icon, track, ticks, tag: null, inside: false });
+  };
+  if ($('v3Air').checked) (traffic?.aircraft || []).forEach((v) => add(v, false));
+  if ($('v3Sea').checked) (traffic?.vessels || []).forEach((v) => add(v, true));
+  moveTraffic(areas);
+  const n = (sea) => movers.filter((m) => m.sea === sea).length;
+  trafficNote = !traffic ? 'traffic snapshot unavailable'
+    : `traffic  ${n(false)} aircraft · ${n(true)} vessels · ${Math.round(snapAge)} min old\n` +
+      `hazards  ${areas.filter((a) => a.kind === 'notam').length} NOTAM · ${areas.filter((a) => a.kind === 'notmar').length} NOTMAR · ${movers.filter((m) => m.inside).length} inside` +
+      (snapAge > STALE_MIN ? '\n         snapshot too old to show aircraft' : '') +
+      ((traffic.notes || []).some((x) => /AIS/.test(x)) ? '\n         no AIS key set: vessels off' : '') +
+      ((hazards?.notes || []).length && !areas.some((a) => a.kind === 'notmar') ? '\n         maritime warnings unavailable' : '');
+}
+
+/** Dead-reckon every aircraft and vessel to the present and redraw its projected track. */
+function moveTraffic(areas = activeAreas()) {
+  const live = areas.filter((a) => a.live), tNow = now() / 1000;
+  for (const m of movers) {
+    const { v, sea } = m, kt = v.kt || 0, hasTrack = v.track != null && kt > 0.3;
+    const kmPerMin = kt * 1.852 / 60, age = Math.max(0, (tNow - v.t) / 60);
+    const at = (min) => {
+      const [la, lo] = hasTrack ? destination(v.lat, v.lon, v.track, kmPerMin * (age + min)) : [v.lat, v.lon];
+      const altFt = sea ? 0 : Math.max(0, (v.alt_ft || 0) + (v.fpm || 0) * Math.min(age + min, 12));
+      const [x, z] = proj(la, lo);
+      return { la, lo, altFt, p: new THREE.Vector3(x, altFt * 0.0003048 * ex + (sea ? 0.08 : 0), z) };
+    };
+    const here = at(0);
+    m.icon.position.copy(here.p);
+    if (hasTrack) {
+      const a = rad(v.track);
+      m.icon.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(Math.sin(a), 0, -Math.cos(a)));
+    }
+    // Projected track: ten minutes ahead, cut short for anything fast so the picture stays readable.
+    const horizon = hasTrack ? Math.min(10, TRACK_CAP_KM / kmPerMin) : 0;
+    m.track.visible = horizon > 0;
+    if (horizon > 0) m.track.geometry.setFromPoints([here.p, at(horizon / 2).p, at(horizon).p]);
+    [5, 10].forEach((min, i) => { m.ticks[i].visible = horizon >= min; if (horizon >= min) m.ticks[i].position.copy(at(min).p); });
+    if (horizon > 0 && horizon < 5) { m.ticks[0].visible = true; m.ticks[0].position.copy(at(horizon).p); }
+    // Inside a hazard area: vessels against maritime areas, aircraft against airspace within its altitudes.
+    const was = m.inside;
+    m.inside = live.some((ar) => (sea ? ar.kind === 'notmar' : ar.kind === 'notam' && here.altFt >= (ar.floor_ft || 0) && here.altFt <= (ar.ceil_ft ?? Infinity))
+      && ar.rings.some((r) => inRing(here.la, here.lo, r)));
+    if (m.inside !== was || (m.inside && !m.tag)) {
+      if (m.tag) { trafficGroup.remove(m.tag); m.tag.material.map.dispose(); m.tag.material.dispose(); m.tag = null; }
+      m.icon.userData.fixed = m.inside ? 0.018 : 0.007;
+      m.track.material.opacity = m.inside ? 1 : 0.5;
+      if (m.inside) { m.tag = label(`${v.name || v.id}${sea ? '' : ' · ' + Math.round(here.altFt / 100) * 100 + ' ft'} · ${Math.round(kt)} kt`, here.p, { color: '#ffe11a', size: 10 }); trafficGroup.add(m.tag); }
+      else { const c = sea ? SEA : AIR; m.icon.material.color.set(c); m.track.material.color.set(c); }
+    }
+    if (m.tag) m.tag.position.copy(here.p);
+  }
+}
+
 function rebuild() {
   if (!scene || !launch || launch.pad.lat == null) return;
   if (root) { scene.remove(root); root.traverse((o) => { o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.uniforms?.map?.value.dispose(); o.material.uniforms?.lut?.value.dispose(); o.material.dispose(); } }); }
@@ -384,6 +509,7 @@ function rebuild() {
   root.add(marker, markerDrop);
   root.add(label(launch.pad.name, new THREE.Vector3(1.5, 0.5, 0), { size: 12 }));
   scene.add(root);
+  trafficGroup = null; buildTraffic();
   $('v3Stamp').textContent = cloud ? `cloud model valid ${utc(cloud.valid)}` : 'cloud model loading…';
 }
 
@@ -414,6 +540,10 @@ function frame(ms) {
   markerDrop.geometry.setFromPoints([p, new THREE.Vector3(p.x, 0, p.z)]);
   $('v3TOut').textContent = `T+${Math.round(t)} s${follow ? ' live' : ''}`;
   // keep markers a constant size on screen
+  if (ms - lastMove > 2000) { lastMove = ms; moveTraffic(); }
+  // anything inside a hazard area flashes red / yellow
+  const flash = Math.floor(ms / 280) % 2 ? 0xff2a2a : 0xffe11a;
+  for (const m of movers) if (m.inside) { m.icon.material.color.set(flash); m.track.material.color.set(flash); }
   root.traverse((o) => { if (o.userData.fixed) o.scale.setScalar(camera.position.distanceTo(o.position) * o.userData.fixed); });
   const tm = telemetry(t);
   if (lastView === 'chase') {
@@ -441,7 +571,7 @@ function frame(ms) {
     (tm.tw ? `liftoff   T/W ${tm.tw.toFixed(2)}  ${(tm.thrust / 1000).toFixed(1)} MN / ${tm.mass.toFixed(0)} t\n` : '') +
     `azimuth   ${heading()}°${launch.heading == null ? ' (assumed)' : ''}  ${tm.env}\n` +
     (radar ? `radar ${new Date(radar.time).toISOString().slice(11, 19)}Z ${Math.max(0, Math.round((now() - radar.time) / 6e4))} min old · ${radar.tilts.length} tilts · VCP ${radar.site.vcp}\n      max ${num(radar.maxDbz)} dBZ at ${num(radar.maxKm, 1)} km · tops ${num(radar.echoTop * 3.281)} kft\n` : radarNote + '\n') +
-    (L ? `cloud max low ${num(L.low)}% mid ${num(L.mid)}% high ${num(L.high)}%` : 'cloud model unavailable');
+    (L ? `cloud max low ${num(L.low)}% mid ${num(L.mid)}% high ${num(L.high)}%` : 'cloud model unavailable') + '\n' + trafficNote;
 }
 
 // ---------------------------------------------------------------- calculated telemetry
@@ -529,10 +659,41 @@ export function init(getT) {
     h('span', {}, h('i', { style: 'background:#fab219' }), 'Modelled ascent corridor: generic two-stage profile flown along the published azimuth, not provider trajectory data'),
     h('span', {}, h('i', { style: 'background:#f0efec' }), 'Clouds: forecast-model cloud fraction on 14 pressure levels, ray-marched; fine texture is synthetic'),
     h('span', {}, h('i', { style: 'background:#7fb2f5' }), 'Wind arrows over the pad point downwind, length by speed'),
-    h('span', {}, 'Drag to orbit, scroll to zoom, right-drag to pan.'));
+    h('span', {}, h('i', { style: 'background:#5fd0ff' }), 'Aircraft and ', h('i', { style: 'background:#6fe36f' }), 'vessels, dead-reckoned from the last snapshot, with a track to where they will be in 10 minutes (dots at 5 and 10; shortened for anything fast)'),
+    h('span', {}, h('i', { style: 'background:#ffd21f' }), 'NOTAM airspace and ', h('i', { style: 'background:#ff5a36' }), 'NOTMAR sea areas; traffic inside an area that is active or starts within two hours flashes red and yellow'),
+    h('span', {}, 'Drag to orbit, scroll to zoom, right-drag to pan. Drag the telemetry box to move it; double-click it to put it back.'));
   onWx(() => { if (shown && launch) { loadClouds(); } });
   setInterval(() => shown && loadClouds(), 15 * 6e4);
   setInterval(() => shown && loadRadar(), 2 * 6e4);
+  setInterval(() => shown && loadTraffic(), 6e4);
+  for (const id of ['v3Air', 'v3Sea', 'v3Haz']) $(id).addEventListener('change', buildTraffic);
+  readoutControls();
+}
+
+// ---- the telemetry overlay can be hidden, or dragged anywhere inside the view (double-click to put it back)
+function readoutControls() {
+  const box = $('v3Readout'), KEY = 'launch-countdown:readout';
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* storage unavailable */ }
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { /* ignore */ } };
+  const place = () => {
+    box.hidden = saved.hidden === true; $('v3Tele').checked = !box.hidden;
+    box.style.left = saved.x != null ? `${saved.x * 100}%` : ''; box.style.top = saved.y != null ? `${saved.y * 100}%` : '';
+  };
+  place();
+  $('v3Tele').addEventListener('change', (e) => { saved.hidden = !e.target.checked; save(); place(); });
+  let grab = null;
+  box.addEventListener('pointerdown', (e) => { const r = box.getBoundingClientRect(); grab = [e.clientX - r.left, e.clientY - r.top]; box.setPointerCapture(e.pointerId); e.preventDefault(); });
+  box.addEventListener('pointermove', (e) => {
+    if (!grab) return;
+    const host = box.parentNode.getBoundingClientRect(), r = box.getBoundingClientRect();
+    // stored as a fraction of the view so it survives resizes and the move into the terminal layout
+    saved.x = Math.min(Math.max(0, e.clientX - grab[0] - host.left), Math.max(0, host.width - r.width)) / host.width;
+    saved.y = Math.min(Math.max(0, e.clientY - grab[1] - host.top), Math.max(0, host.height - r.height)) / host.height;
+    place();
+  });
+  box.addEventListener('pointerup', () => { if (grab) { grab = null; save(); } });
+  box.addEventListener('dblclick', () => { delete saved.x; delete saved.y; save(); place(); });
 }
 
 export function setView(name) { $('v3View').value = name; view(name); }
@@ -547,7 +708,7 @@ export function setLaunch(l) {
 
 export function show() {
   if (shown) return; shown = true;
-  loadClouds(); loadRadar(); rebuild();
+  loadClouds(); loadRadar(); loadTraffic(); rebuild();
   raf = requestAnimationFrame(frame);
 }
 export function hide() { shown = false; cancelAnimationFrame(raf); }

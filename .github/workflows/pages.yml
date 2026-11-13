@@ -32,6 +32,12 @@ jobs:
           python3 scripts/fetch_launches.py \
             --previous "${{ steps.pages.outputs.base_url }}/data/cache.json" \
             --out data/launches.json || echo "::warning::launch data refresh failed; deploying the committed copy"
+      - name: Snapshot aircraft, vessels and hazard areas
+        env:
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+        run: |
+          if [ -n "$AISSTREAM_API_KEY" ]; then pip install -q websockets; fi
+          python3 scripts/fetch_traffic.py || echo "::warning::traffic snapshot failed"
       - name: Stamp the build
         run: echo "{\"sha\":\"$GITHUB_SHA\"}" > version.json
       - uses: actions/upload-pages-artifact@v3

@@ -329,3 +329,6 @@ html[data-theme=daylight] .leaflet-control-layers, html[data-theme=daylight] .v3
 .menu .show-tabs { left: 0; right: auto; top: 36px; max-height: 60vh; overflow-y: auto; white-space: nowrap; }
 .menu .show-tabs b { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin-top: 4px; }
 .saver #sitePick { display: none !important; }
+
+.v3-readout { pointer-events: auto !important; cursor: move; user-select: none; touch-action: none; }
+.v3-readout[hidden] { display: none; }
