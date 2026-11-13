@@ -507,6 +507,7 @@ function activeAreas() {
 function buildTraffic() {
   if (!root || !launch || launch.pad.lat == null) return;
   if (trafficGroup) { root.remove(trafficGroup); trafficGroup.traverse((o) => { if (!shared(o.geometry)) o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.dispose(); } }); }
+  const shownAt = new Map(movers.map((m) => [m.v.id, { p: m.icon.position.clone(), r: m.icon.rotation.y }]));
   trafficGroup = new THREE.Group(); movers = []; models();
   root.add(trafficGroup);
   const areas = activeAreas(), g = trafficGroup;
@@ -550,11 +551,11 @@ function buildTraffic() {
     const mark = (pts) => { const m = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts.map(([x, z]) => new THREE.Vector3(x, 0, z))), track.material); m.userData.fixed = 0.007; m.renderOrder = 7; return m; };
     const ticks = [mark([[-1, 0], [1, 0]]), mark([[-1, -1], [1, 1], [-1, 1], [1, -1]])];
     g.add(icon, track, ...ticks);
-    movers.push({ v, sea, icon, track, ticks, stalk, size, tag: null, inside: false, state: 0 });
+    movers.push({ v, sea, icon, track, ticks, stalk, size, tag: null, inside: false, state: 0, prev: shownAt.get(v.id) || null, off: new THREE.Vector3(), rotOff: 0 });
   };
   if ($('v3Air').checked) (traffic?.aircraft || []).forEach((v) => add(v, false));
   if ($('v3Sea').checked) (traffic?.vessels || []).forEach((v) => add(v, true));
-  moveTraffic(areas);
+  moveTraffic(true, 0);
 }
 
 /** The traffic lines in the readout; refreshed whenever positions are, so the counts follow the clock. */
@@ -570,7 +571,12 @@ function noteTraffic(areas) {
 }
 
 /** Dead-reckon every aircraft and vessel to the present and redraw its projected track. */
-function moveTraffic(areas = activeAreas()) {
+// Positions are recomputed every frame so everything glides; the hazard checks run every two seconds.
+// When a new snapshot corrects a position, the model eases across to it instead of jumping.
+let areasNow = [], lastFrameMs = 0;
+function moveTraffic(full = true, dt = 0) {
+  if (full) areasNow = activeAreas();
+  const areas = areasNow, ease = Math.exp(-dt / 2.5);
   const live = areas.filter((a) => a.live), tNow = now() / 1000;
   const clock = tGetter(), toT0 = clock == null ? null : -clock / 6e4, t0ms = clock == null ? null : now() - clock; // minutes to T-0, and T-0 itself
   for (const m of movers) {
@@ -583,16 +589,27 @@ function moveTraffic(areas = activeAreas()) {
       return { la, lo, altFt, p: new THREE.Vector3(x, altFt * 0.0003048 * ex + (sea ? 0.08 : 0), z) };
     };
     const here = at(0);
+    const hdg = hasTrack ? v.track : v.heading, rot = hdg != null ? -rad(hdg) : m.icon.rotation.y;
+    if (m.prev) {
+      // first placement after a new snapshot: start from where the model was being shown
+      m.off = m.prev.p.sub(here.p); if (m.off.length() > 40) m.off.set(0, 0, 0);
+      m.rotOff = Math.atan2(Math.sin(m.prev.r - rot), Math.cos(m.prev.r - rot));
+      m.prev = null;
+    }
+    m.off.multiplyScalar(ease); m.rotOff *= ease;
+    const shown = (pos) => pos.add(m.off);
+    shown(here.p);
     m.icon.position.copy(here.p);
-    const hdg = hasTrack ? v.track : v.heading;
-    if (hdg != null) m.icon.rotation.y = -rad(hdg);
+    m.icon.rotation.y = rot + m.rotOff;
     if (m.stalk) m.stalk.geometry.setFromPoints([here.p, new THREE.Vector3(here.p.x, 0, here.p.z)]);
     // Projected track: ten minutes ahead, cut short for anything fast so the picture stays readable.
     const horizon = hasTrack ? Math.min(10, TRACK_CAP_KM / kmPerMin) : 0;
     m.track.visible = horizon > 0;
-    if (horizon > 0) m.track.geometry.setFromPoints([here.p, at(horizon / 2).p, at(horizon).p]);
-    [5, 10].forEach((min, i) => { m.ticks[i].visible = horizon >= min; if (horizon >= min) { m.ticks[i].position.copy(at(min).p); m.ticks[i].rotation.y = -rad(v.track); } });
-    if (horizon > 0 && horizon < 5) { m.ticks[0].visible = true; m.ticks[0].position.copy(at(horizon).p); m.ticks[0].rotation.y = -rad(v.track); } // too fast for 5 minutes: tick where the track ends
+    if (horizon > 0) m.track.geometry.setFromPoints([here.p, shown(at(horizon / 2).p), shown(at(horizon).p)]);
+    [5, 10].forEach((min, i) => { m.ticks[i].visible = horizon >= min; if (horizon >= min) { m.ticks[i].position.copy(shown(at(min).p)); m.ticks[i].rotation.y = -rad(v.track); } });
+    if (horizon > 0 && horizon < 5) { m.ticks[0].visible = true; m.ticks[0].position.copy(shown(at(horizon).p)); m.ticks[0].rotation.y = -rad(v.track); } // too fast for 5 minutes: tick where the track ends
+    if (m.tag) m.tag.position.copy(here.p);
+    if (!full) continue;
     // State 2: inside a hazard area or the launch corridor right now (flashes red / yellow).
     // State 1: on course to be inside one at T-0 (flashes red). Vessels are checked against maritime
     // areas and aircraft against airspace within its altitudes; both against the corridor footprint.
@@ -615,7 +632,7 @@ function moveTraffic(areas = activeAreas()) {
     }
     if (m.tag) m.tag.position.copy(here.p);
   }
-  noteTraffic(areas);
+  if (full) noteTraffic(areas);
 }
 
 function rebuild() {
@@ -666,7 +683,8 @@ function frame(ms) {
   markerDrop.geometry.setFromPoints([p, new THREE.Vector3(p.x, 0, p.z)]);
   $('v3TOut').textContent = `T+${Math.round(t)} s${follow ? ' live' : ''}`;
   // keep markers a constant size on screen
-  if (ms - lastMove > 2000) { lastMove = ms; moveTraffic(); }
+  const dt = Math.min(0.5, (ms - lastFrameMs) / 1000 || 0); lastFrameMs = ms;
+  if (ms - lastMove > 2000) { lastMove = ms; moveTraffic(true, dt); } else moveTraffic(false, dt);
   // anything inside a hazard area flashes red / yellow
   const flash = Math.floor(ms / 280) % 2 ? 0xff2a2a : 0xffe11a;
   const warn = Math.floor(ms / 280) % 2 ? 0xff2a2a : 0x5a0c0c;
