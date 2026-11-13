@@ -59,6 +59,19 @@ function label(text, pos, { color = '#f0efec', size = 13 } = {}) {
   s.scale.set(c.width / c.height * 0.035, 0.035, 1); s.center.set(0, 0.5); s.position.copy(pos); s.renderOrder = 10;
   return s;
 }
+/**
+ * Move a line's points without allocating: the vertex buffer is created once and rewritten in place.
+ * (Rebuilding the geometry every frame makes a new GPU buffer each time and the old ones pile up.)
+ */
+function setLine(obj, pts) {
+  let a = obj.geometry.getAttribute('position');
+  if (!a || a.count !== pts.length) {
+    a = new THREE.BufferAttribute(new Float32Array(pts.length * 3), 3); a.setUsage(THREE.DynamicDrawUsage);
+    obj.geometry.setAttribute('position', a); obj.frustumCulled = false; // bounds change every frame; skip the culling test
+  }
+  pts.forEach((p, i) => a.setXYZ(i, p.x, p.y, p.z));
+  a.needsUpdate = true;
+}
 const line = (pts, color, opacity = 1) => new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity }));
 
 // ---------------------------------------------------------------- ground
@@ -579,6 +592,8 @@ function moveTraffic(full = true, dt = 0) {
   const areas = areasNow, ease = Math.exp(-dt / 2.5);
   const live = areas.filter((a) => a.live), tNow = now() / 1000;
   const clock = tGetter(), toT0 = clock == null ? null : -clock / 6e4, t0ms = clock == null ? null : now() - clock; // minutes to T-0, and T-0 itself
+  // the corridor footprint only matters around launch: from two hours before T-0 to fifteen minutes after
+  const corridorHot = toT0 != null && toT0 <= 120 && toT0 >= -15;
   for (const m of movers) {
     const { v, sea } = m, kt = v.kt || 0, hasTrack = v.track != null && kt > 0.3;
     const kmPerMin = kt * 1.852 / 60, age = Math.max(0, (tNow - v.t) / 60);
@@ -601,11 +616,11 @@ function moveTraffic(full = true, dt = 0) {
     shown(here.p);
     m.icon.position.copy(here.p);
     m.icon.rotation.y = rot + m.rotOff;
-    if (m.stalk) m.stalk.geometry.setFromPoints([here.p, new THREE.Vector3(here.p.x, 0, here.p.z)]);
+    if (m.stalk) setLine(m.stalk, [here.p, { x: here.p.x, y: 0, z: here.p.z }]);
     // Projected track: ten minutes ahead, cut short for anything fast so the picture stays readable.
     const horizon = hasTrack ? Math.min(10, TRACK_CAP_KM / kmPerMin) : 0;
     m.track.visible = horizon > 0;
-    if (horizon > 0) m.track.geometry.setFromPoints([here.p, shown(at(horizon / 2).p), shown(at(horizon).p)]);
+    if (horizon > 0) setLine(m.track, [here.p, shown(at(horizon / 2).p), shown(at(horizon).p)]);
     [5, 10].forEach((min, i) => { m.ticks[i].visible = horizon >= min; if (horizon >= min) { m.ticks[i].position.copy(shown(at(min).p)); m.ticks[i].rotation.y = -rad(v.track); } });
     if (horizon > 0 && horizon < 5) { m.ticks[0].visible = true; m.ticks[0].position.copy(shown(at(horizon).p)); m.ticks[0].rotation.y = -rad(v.track); } // too fast for 5 minutes: tick where the track ends
     if (m.tag) m.tag.position.copy(here.p);
@@ -613,7 +628,7 @@ function moveTraffic(full = true, dt = 0) {
     // State 2: inside a hazard area or the launch corridor right now (flashes red / yellow).
     // State 1: on course to be inside one at T-0 (flashes red). Vessels are checked against maritime
     // areas and aircraft against airspace within its altitudes; both against the corridor footprint.
-    const hit = (pos, list) => inCorridor(pos.la, pos.lo) || list.some((ar) => (sea ? ar.kind === 'notmar' : ar.kind === 'notam' && pos.altFt >= (ar.floor_ft || 0) && pos.altFt <= (ar.ceil_ft ?? Infinity))
+    const hit = (pos, list) => (corridorHot && inCorridor(pos.la, pos.lo)) || list.some((ar) => (sea ? ar.kind === 'notmar' : ar.kind === 'notam' && pos.altFt >= (ar.floor_ft || 0) && pos.altFt <= (ar.ceil_ft ?? Infinity))
       && ar.rings.some((r) => inRing(pos.la, pos.lo, r)));
     let state = hit(here, live) ? 2 : 0;
     // A straight-line forecast is only meaningful a short way ahead: three hours for a ship, twenty minutes for an aircraft.
@@ -680,7 +695,7 @@ function frame(ms) {
   if (follow) $('v3T').value = Math.round(t);
   const p = flightPos(t);
   marker.position.copy(p);
-  markerDrop.geometry.setFromPoints([p, new THREE.Vector3(p.x, 0, p.z)]);
+  setLine(markerDrop, [p, { x: p.x, y: 0, z: p.z }]);
   $('v3TOut').textContent = `T+${Math.round(t)} s${follow ? ' live' : ''}`;
   // keep markers a constant size on screen
   const dt = Math.min(0.5, (ms - lastFrameMs) / 1000 || 0); lastFrameMs = ms;
