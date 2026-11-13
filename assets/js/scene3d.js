@@ -25,6 +25,7 @@ const stdKm = (p) => 44.33 * (1 - (p / 1013.25) ** 0.1903); // standard-atmosphe
 
 let radarMesh = null, radar = null, radarKey = '', radarBusy = false, radarNote = 'radar volume loading…', worker = null;
 let renderer, scene, camera, controls, root, cloudMesh, marker, markerDrop, box, launch = null, tGetter = () => null;
+let chaseDist = null;
 let ex = 1, shown = false, raf = 0, cloud = null, cloudKey = '', lastView = 'clouds';
 
 /** Catmull-Rom through a table column, so position is a smooth function of flight time. */
@@ -136,7 +137,7 @@ function buildPole(g) {
     if (l.kt == null || l.dir == null || l.z == null || l.z > top * 1000 || l.kt < 1) continue;
     const to = rad(l.dir + 180), dir = new THREE.Vector3(Math.sin(to), 0, -Math.cos(to)), len = Math.max(3, l.kt * 0.5);
     g.add(new THREE.ArrowHelper(dir, new THREE.Vector3(0, l.z / 1000 * ex, 0), len, WIND, Math.min(4, len * 0.3), Math.min(2, len * 0.15)));
-    if (l.z / 1000 - last > 2.6) { last = l.z / 1000; g.add(label(`${Math.round(l.kt)} kt ${compass(l.dir)}`, dir.clone().multiplyScalar(len + 1).setY(l.z / 1000 * ex), { color: '#9cc3f7', size: 10 })); }
+    if ($('v3WindLbl').checked && l.z / 1000 - last > 2.6) { last = l.z / 1000; g.add(label(`${Math.round(l.kt)} kt ${compass(l.dir)}`, dir.clone().multiplyScalar(len + 1).setY(l.z / 1000 * ex), { color: '#9cc3f7', size: 10 })); }
   }
   if (prof.levels.some((l) => l.t != null)) {
     const fz = prof.levels.find((l, i, a) => i && l.t <= 0 && a[i - 1].t > 0);
@@ -173,7 +174,7 @@ float cover(vec3 p) { return texture(map, vec3(p.x + 0.5, 0.5 - p.z, p.y + 0.5))
 float density(vec3 p) {
   float c = cover(p);
   if (c < 0.015) return 0.0;
-  vec3 q = p * size / vec3(11.0, 1.4, 11.0); q.x += time * 0.03;
+  vec3 q = p * size / vec3(11.0, 1.4, 11.0);
   // Break the smooth model field into cloud-sized lumps that fill about a fraction c of the layer.
   float th = mix(0.74, 0.22, c);
   // Fade out toward the walls and lid so the box never slices a cloud into a flat face.
@@ -189,11 +190,16 @@ void main() {
   vec2 hit = hitBox(vOrigin, d);
   if (hit.x > hit.y) discard;
   hit.x = max(hit.x, 0.0);
-  const int STEPS = 84;
-  float dt = (hit.y - hit.x) / float(STEPS), T = 1.0;
-  vec3 p = vOrigin + d * (hit.x + dt * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))))), col = vec3(0.0);
+  // Fixed-length steps on shells centred on the camera: neighbouring pixels sample the same
+  // depths, so the picture does not shimmer as the camera orbits.
+  const int STEPS = 150;
+  float dt = max(0.008, (hit.y - hit.x) / float(STEPS)), T = 1.0;
+  float t = ceil(hit.x / dt) * dt;
+  vec3 p = vOrigin + d * t, col = vec3(0.0);
   float kmPerUnit = length(d * size);
   for (int i = 0; i < STEPS; i++) {
+    if (t > hit.y) break;
+    t += dt;
     float dn = density(p);
     if (dn > 0.001) {
       float shade = exp(-density(p + sun * 0.035) * 1.1 - density(p + sun * 0.09) * 0.7);
@@ -237,10 +243,13 @@ void main() {
   vec2 hit = hitBox(vOrigin, d);
   if (hit.x > hit.y) discard;
   hit.x = max(hit.x, 0.0);
-  const int STEPS = 160;
-  float dt = (hit.y - hit.x) / float(STEPS), T = 1.0, km = length(d * size) * dt;
-  vec3 p = vOrigin + d * (hit.x + dt * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))))), col = vec3(0.0);
+  const int STEPS = 200;
+  float dt = max(0.006, (hit.y - hit.x) / float(STEPS)), T = 1.0, km = length(d * size) * dt;
+  float t = ceil(hit.x / dt) * dt;
+  vec3 p = vOrigin + d * t, col = vec3(0.0);
   for (int i = 0; i < STEPS; i++) {
+    if (t > hit.y) break;
+    t += dt;
     // texture axes: x east, y north, z up; bytes are dBZ * 2 + 64, 0 = no echo
     float r = texture(map, vec3(p.x + 0.5, 0.5 - p.z, p.y + 0.5)).r, dbz = r * 127.5 - 32.0;
     if (r > 0.004 && dbz >= minDbz) {
@@ -370,14 +379,15 @@ function rebuild() {
 function view(name) {
   lastView = name;
   const az = rad(heading()), along = new THREE.Vector3(Math.sin(az), 0, -Math.cos(az)), side = new THREE.Vector3(along.z, 0, -along.x);
+  if (name === 'chase') { chaseDist = null; return; }
   if (name === 'ascent') {
-    const mid = flightPos(330); controls.target.set(mid.x * 0.9, 60 * ex * 0.5, mid.z * 0.9);
-    camera.position.copy(controls.target).addScaledVector(side, 1500).add(new THREE.Vector3(0, 500, 0)).addScaledVector(along, -350);
+    const mid = flightPos(230); controls.target.set(mid.x, 55 * ex, mid.z);
+    camera.position.copy(controls.target).addScaledVector(side, 780).add(new THREE.Vector3(0, 230, 0)).addScaledVector(along, -260);
   } else if (name === 'top') {
     controls.target.set(0, 0, 0); camera.position.set(0, 620, 1);
   } else {
     controls.target.set(0, 4 * ex, 0);
-    camera.position.copy(controls.target).addScaledVector(side, 210).addScaledVector(along, -130).add(new THREE.Vector3(0, 70 + 12 * ex, 0));
+    camera.position.copy(controls.target).addScaledVector(side, 105).addScaledVector(along, -65).add(new THREE.Vector3(0, 42 + 10 * ex, 0));
   }
   controls.update();
 }
@@ -394,13 +404,88 @@ function frame(ms) {
   $('v3TOut').textContent = `T+${Math.round(t)} s${follow ? ' live' : ''}`;
   // keep markers a constant size on screen
   root.traverse((o) => { if (o.userData.fixed) o.scale.setScalar(camera.position.distanceTo(o.position) * o.userData.fixed); });
-  if (cloudMesh) cloudMesh.material.uniforms.time.value = ms / 1000;
-  controls.autoRotate = $('v3Spin').checked; controls.update();
+  const tm = telemetry(t);
+  if (lastView === 'chase') {
+    // Follow the vehicle, close in while it is slow and pulling back as it accelerates.
+    const want = Math.min(1100, 9 + 150 * tm.v), az = rad(heading());
+    chaseDist = chaseDist == null ? want : chaseDist + (want - chaseDist) * 0.04;
+    const along = new THREE.Vector3(Math.sin(az), 0, -Math.cos(az)), side = new THREE.Vector3(along.z, 0, -along.x);
+    controls.target.lerp(p, chaseDist === want ? 1 : 0.15);
+    camera.position.copy(controls.target).addScaledVector(side, chaseDist).addScaledVector(along, -chaseDist * 0.35).add(new THREE.Vector3(0, chaseDist * 0.3, 0));
+    controls.autoRotate = false; controls.update();
+  } else { controls.autoRotate = $('v3Spin').checked; controls.update(); }
   renderer.render(scene, camera);
-  const L = cloud?.layers;
-  $('v3Readout').textContent = `vehicle  T+${String(Math.round(t)).padStart(3)} s\naltitude ${num(spline(1, t), 1).padStart(6)} km  ${num(spline(1, t) * 3.281).padStart(4)} kft\ndownrange${num(spline(2, t), 1).padStart(6)} km\nazimuth  ${heading()}°${launch.heading == null ? ' (assumed)' : ''}\n` +
-    (radar ? `radar    ${new Date(radar.time).toISOString().slice(11, 19)}Z  ${Math.max(0, Math.round((now() - radar.time) / 6e4))} min old  VCP ${radar.site.vcp}\n         ${radar.tilts.length} tilts ${radar.tilts[0]}°–${radar.tilts[radar.tilts.length - 1]}°\n         max ${num(radar.maxDbz)} dBZ at ${num(radar.maxKm, 1)} km · tops ${num(radar.echoTop * 3.281)} kft\n` : radarNote + '\n') +
-    (L ? `cloud max low ${num(L.low)}%  mid ${num(L.mid)}%  high ${num(L.high)}%${L.low + L.mid + L.high < 3 ? '\nmodel shows clear skies in the volume' : ''}` : 'cloud model unavailable');
+  const L = cloud?.layers, P = (v, d = 0, w = 6) => num(v, d).padStart(w);
+  $('v3Readout').textContent =
+    `T+${String(Math.round(t)).padStart(3)} s   calculated telemetry\n` +
+    `altitude  ${P(tm.alt, 1)} km  ${P(tm.alt * 3.281, 0, 5)} kft\n` +
+    `downrange ${P(tm.dr, 1)} km\n` +
+    `velocity  ${P(tm.v * 1000)} m/s ${P(tm.v * 3600, 0, 6)} km/h\n` +
+    `vertical  ${P(tm.vv * 1000)} m/s  path ${P(tm.gamma, 0, 3)}°\n` +
+    `Mach      ${P(tm.mach, 2)}      accel ${P(tm.g, 1, 4)} g\n` +
+    `dyn press ${P(tm.q / 1000, 1)} kPa${tm.maxQ ? '  ← near max-Q' : ''}\n` +
+    `air       ${P(tm.tempC, 0)} °C  ${tm.p >= 1 ? P(tm.p, 0, 5) + ' hPa' : P(tm.p * 100, 1, 5) + ' Pa'}\n` +
+    `density   ${tm.rho >= 0.001 ? P(tm.rho, 3) + ' kg/m³' : P(tm.rho * 1e6, 1) + ' mg/m³'}\n` +
+    (tm.windKt != null ? `wind      ${P(tm.windKt, 0)} kt from ${String(Math.round(tm.windDir)).padStart(3, '0')}°\n          ${tm.head >= 0 ? 'head' : 'tail'} ${P(Math.abs(tm.head), 0, 4)} kt  cross ${P(Math.abs(tm.cross), 0, 3)} kt ${tm.cross >= 0 ? 'R' : 'L'}\n` : '') +
+    (tm.tw ? `liftoff   T/W ${tm.tw.toFixed(2)}  ${(tm.thrust / 1000).toFixed(1)} MN / ${tm.mass.toFixed(0)} t\n` : '') +
+    `azimuth   ${heading()}°${launch.heading == null ? ' (assumed)' : ''}  ${tm.env}\n` +
+    (radar ? `radar ${new Date(radar.time).toISOString().slice(11, 19)}Z ${Math.max(0, Math.round((now() - radar.time) / 6e4))} min old · ${radar.tilts.length} tilts · VCP ${radar.site.vcp}\n      max ${num(radar.maxDbz)} dBZ at ${num(radar.maxKm, 1)} km · tops ${num(radar.echoTop * 3.281)} kft\n` : radarNote + '\n') +
+    (L ? `cloud max low ${num(L.low)}% mid ${num(L.mid)}% high ${num(L.high)}%` : 'cloud model unavailable');
+}
+
+// ---------------------------------------------------------------- calculated telemetry
+
+/** Temperature, pressure, density and wind at a height, from the model sounding over the pad. */
+function atmosphere(zKm) {
+  const prof = (wx.target && !wx.target.tbd && wx.profiles.t0) || wx.profiles.now;
+  const lv = prof ? prof.levels.filter((l) => l.z != null && l.t != null && l.p != null) : [];
+  if (lv.length < 2) { // no sounding yet: standard atmosphere
+    const T = zKm < 11 ? 15 - 6.5 * zKm : -56.5, p = 1013.25 * Math.exp(-zKm / 7.2);
+    return { T, p, rho: p * 100 / (287.05 * (T + 273.15)), src: 'std atmosphere' };
+  }
+  const z = zKm * 1000, top = lv[lv.length - 1];
+  let T, p, kt = null, dir = null;
+  if (z >= top.z) { // above the sounding: hold temperature, let pressure fall off with a 6.5 km scale height
+    T = top.t; p = top.p * Math.exp(-(z - top.z) / 6500);
+  } else {
+    let i = lv.findIndex((l) => l.z > z); i = Math.max(1, i);
+    const a = lv[i - 1], b = lv[i], f = Math.min(1, Math.max(0, (z - a.z) / (b.z - a.z)));
+    T = a.t + (b.t - a.t) * f; p = a.p * (b.p / a.p) ** f;
+    if (a.kt != null && b.kt != null) {
+      // blend winds as vectors so a direction change through north does not swing the long way round
+      const u = (l) => -l.kt * Math.sin(rad(l.dir)), v = (l) => -l.kt * Math.cos(rad(l.dir));
+      const uu = u(a) + (u(b) - u(a)) * f, vv = v(a) + (v(b) - v(a)) * f;
+      kt = Math.hypot(uu, vv); dir = (Math.atan2(-uu, -vv) * 180 / Math.PI + 360) % 360;
+    }
+  }
+  return { T, p, rho: p * 100 / (287.05 * (T + 273.15)), kt, dir, src: wx.profiles.t0 && !wx.target.tbd ? 'T-0 sounding' : 'current sounding' };
+}
+
+/**
+ * Flight state at time t from the nominal ascent profile, flown through the forecast atmosphere.
+ * Speeds are ground-relative along the profile; Mach and dynamic pressure use the airspeed after
+ * subtracting the wind at that height.
+ */
+function telemetry(t) {
+  const h = 1, alt = spline(1, t), dr = spline(2, t);
+  const vel = (tt) => [(spline(2, tt + h) - spline(2, Math.max(0, tt - h))) / (tt < h ? tt + h : 2 * h), (spline(1, tt + h) - spline(1, Math.max(0, tt - h))) / (tt < h ? tt + h : 2 * h)];
+  const [vh, vv] = vel(t), v = Math.hypot(vh, vv);
+  // acceleration over a 6 s span, which smooths the joins between profile segments
+  const [h1, v1] = vel(Math.max(0, t - 3)), [h2, v2] = vel(t + 3), span = t < 3 ? t + 3 : 6;
+  const ax = (h2 - h1) / span * 1000, ay = (v2 - v1) / span * 1000 + 9.81 * Math.max(0, 1 - (vh / 7.8) ** 2);
+  const A = atmosphere(alt);
+  let head = null, cross = null, air = v;
+  if (A.kt != null) {
+    const rel = rad(A.dir - heading()), ms = A.kt * 0.5144;
+    head = A.kt * Math.cos(rel); cross = A.kt * Math.sin(rel);
+    air = Math.hypot(vh * 1000 + ms * Math.cos(rel), ms * Math.sin(rel), vv * 1000) / 1000;
+  }
+  const q = 0.5 * A.rho * (air * 1000) ** 2, qPrev = 0.5 * atmosphere(spline(1, t + 4)).rho * (Math.hypot(...vel(t + 4)) * 1000) ** 2;
+  const cfg = launch.nsf?.rocket_config || {}, ll = launch.ll2?.rocket?.configuration || {};
+  const thrust = cfg.liftoff_thrust || ll.to_thrust, mass = ll.launch_mass;
+  return { alt, dr, v, vv, gamma: v > 0.001 ? Math.atan2(vv, vh) * 180 / Math.PI : 90, g: Math.hypot(ax, ay) / 9.81, mach: air * 1000 / Math.sqrt(1.4 * 287.05 * (A.T + 273.15)),
+    q, maxQ: t > 20 && q > 15000 && Math.abs(q - qPrev) / q < 0.08, tempC: A.T, p: A.p, rho: A.rho, windKt: A.kt, windDir: A.dir, head, cross,
+    thrust, mass, tw: thrust && mass ? thrust / (mass * 9.81) : null, env: A.src };
 }
 
 export function init(getT) {
@@ -422,6 +507,7 @@ export function init(getT) {
   $('v3Time').addEventListener('change', loadClouds);
   $('v3Exag').addEventListener('input', (e) => { ex = +e.target.value; $('v3ExagOut').textContent = `${ex}×`; rebuild(); view(lastView); });
   $('v3Dens').addEventListener('input', (e) => { if (cloudMesh) cloudMesh.material.uniforms.dens.value = +e.target.value; });
+  $('v3WindLbl').addEventListener('change', rebuild);
   $('v3T').addEventListener('input', () => { $('v3Follow').checked = false; });
   $('v3Radar').addEventListener('change', (e) => { if (radarMesh) radarMesh.visible = e.target.checked; if (e.target.checked) loadRadar(); });
   $('v3Clouds').addEventListener('change', (e) => { if (cloudMesh) cloudMesh.visible = e.target.checked; });
@@ -437,6 +523,8 @@ export function init(getT) {
   setInterval(() => shown && loadClouds(), 15 * 6e4);
   setInterval(() => shown && loadRadar(), 2 * 6e4);
 }
+
+export function setView(name) { $('v3View').value = name; view(name); }
 
 export function setLaunch(l) {
   const moved = !launch || launch.pad.lat !== l.pad.lat || launch.heading !== l.heading || launch.id !== l.id;

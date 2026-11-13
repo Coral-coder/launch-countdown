@@ -7,6 +7,8 @@ A static GitHub Pages site that counts down to the next launch from Cape Canaver
 Each section is its own tab; nothing scrolls as one long page. **Slideshow** (`P`) cycles through the tabs on a timer you set in seconds, and the **Tabs** menu picks which ones it visits. Arrow keys step between tabs. The site reloads itself when a new version is deployed and re-reads launch data every minute; an entered T-0 survives both unless the source publishes a new one.
 
 - **Volumetric radar** (3D tab): the browser downloads the newest KMLB Level II volume from the public NEXRAD archive on AWS, decodes every reflectivity tilt in a web worker, resamples it to a 192 × 192 × 40 grid around the pad and ray-marches it with the NWS colour scale. It checks for a new volume every two minutes; volumes arrive roughly 5 to 8 minutes after the scan starts.
+- **Terminal count**: from T-1 h to T+15 min the page switches by itself to one fixed layout: count top centre, the 3D corridor on the left, live video on the right with the countdown timeline beneath it. The slideshow pauses for it. Before liftoff the corridor view sits close on the pad; after liftoff the camera follows the vehicle and pulls back as it accelerates.
+- **Calculated telemetry** (3D view): altitude, downrange, velocity, flight-path angle, Mach, acceleration, dynamic pressure, outside temperature, pressure and density, and the wind at the vehicle's height with head/tail and cross components. It is computed from the nominal ascent profile flown through the forecast sounding over the pad, not received from the vehicle.
 - **3D Ascent & Clouds**: a WebGL scene with a modelled ascent corridor along the published azimuth, a ray-marched cloud volume (300 × 300 × 16 km) built from forecast-model cloud fraction on 14 pressure levels, the wind profile over the pad, the freezing level, and a vehicle marker that follows the clock after liftoff. The corridor is a generic two-stage profile, not provider trajectory data, and the fine cloud texture is synthetic.
 
 - **Countdown** to T-0 in days, hours, minutes, seconds and milliseconds, with **HOLD**, **SCRUB** and **RESET** controls in the top bar (`H` toggles a hold).
@@ -27,7 +29,9 @@ Each section is its own tab; nothing scrolls as one long page. **Slideshow** (`P
 
 `screensaver/` is a small WinForms program that shows the site full-screen in WebView2 as a `.scr`. Download the latest build from the [screensaver release](https://github.com/Coral-coder/launch-countdown/releases/tag/screensaver), extract the folder, right-click `LaunchCountdown.scr` and choose **Install**.
 
-It opens the site with `?screensaver=1&secs=20`, which forces the slideshow, hides the controls and skips the video tab. It does not keep the display awake: there is no video playback and no power request, so the Windows display timer applies as usual, and the screensaver's own timer (default 30 minutes, set under **Settings…**) switches the monitor off as well.
+It opens the site with `?screensaver=1&secs=20`, which forces the slideshow, hides the controls and skips the video tab. The build is manual: run the **Build Windows screensaver** workflow from the Actions tab to publish a new version.
+
+It does not keep the display awake: there is no video playback and no power request, so the Windows display timer applies as usual, and the screensaver's own timer (default 30 minutes, set under **Settings…**) switches the monitor off as well.
 
 ## How the data gets there
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import re
 import sys
 import time
@@ -325,6 +326,15 @@ def main() -> int:
 
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(prev, f, ensure_ascii=False, separators=(",", ":"))
+    # A tiny file for the Windows screensaver helper, which only needs to know when to wake the display.
+    now_iso = datetime.now(timezone.utc)
+    upcoming = [x for x in prev["launches"] if not x.get("past") and not x.get("time_tbd") and parse_t(x.get("net"))
+                and (parse_t(x["net"]) - now_iso).total_seconds() > -900]
+    nxt = upcoming[0] if upcoming else None
+    with open(os.path.join(os.path.dirname(a.out) or ".", "next.json"), "w", encoding="utf-8") as f:
+        json.dump({"generated_at": prev.get("generated_at"), "id": nxt and nxt["id"], "name": nxt and nxt["name"],
+                   "rocket": nxt and nxt["rocket"], "pad": nxt and nxt["pad"]["name"],
+                   "net": nxt and parse_t(nxt["net"]).strftime("%Y-%m-%dT%H:%M:%SZ")}, f)
     log(f"wrote {a.out}: {len(prev['launches'])} launches from {', '.join(prev.get('sources', []))}")
     return 0
 

@@ -35,6 +35,22 @@
 </nav>
 
 <main id="panels">
+<section class="panel terminal" data-tab="terminal" data-label="Terminal Count">
+  <div class="t-count">
+    <div class="t-name" id="tName">—</div>
+    <div class="clock t-clock" id="tClock"><span class="sign" id="tSign">T-</span><span id="tH">00</span>:<span id="tM">00</span>:<span id="tS">00</span><span class="ms" id="tMs">.000</span></div>
+    <div><span id="tBanner" class="banner">—</span></div>
+    <div class="next-event" id="tNext"></div>
+  </div>
+  <div class="t-left"><div id="tCorridor"></div></div>
+  <div class="t-right">
+    <article class="card t-video">
+      <div class="range-row" id="tVidPick"></div>
+      <div class="video" id="tVideo"><div class="empty">No live video published yet.</div></div>
+    </article>
+    <article class="card t-tl"><h2>Countdown Timeline</h2><div id="tTimeline" class="timeline"></div></article>
+  </div>
+</section>
 <section class="panel" data-tab="countdown" data-label="Countdown">
   <div class="hero" id="hero">
     <div class="hero-bg" id="heroBg"></div>
@@ -82,7 +98,7 @@
 <section class="panel card fill" data-tab="3d" data-label="3D Radar &amp; Ascent">
   <h2>Ascent Corridor, Radar &amp; Cloud Volume <span class="muted" id="v3Stamp"></span></h2>
   <div class="map-controls">
-    <label>View <select id="v3View"><option value="clouds">Pad, radar &amp; clouds</option><option value="ascent">Full ascent</option><option value="top">Top down</option></select></label>
+    <label>View <select id="v3View"><option value="clouds">Pad, radar &amp; clouds</option><option value="ascent">Full ascent</option><option value="chase">Follow vehicle</option><option value="top">Top down</option></select></label>
     <label>Clouds valid <select id="v3Time"><option value="now">Now</option><option value="t0">At T-0</option></select></label>
     <label>Vertical scale <input type="range" id="v3Exag" min="1" max="10" step="1" value="1"> <span id="v3ExagOut">1×</span></label>
     <label>Cloud density <input type="range" id="v3Dens" min="0.2" max="3" step="0.1" value="1"></label>
@@ -91,10 +107,11 @@
     <label>Min dBZ <input type="range" id="v3MinDbz" min="0" max="45" step="1" value="12"> <span id="v3MinOut" class="mono">12</span></label>
     <label>Radar opacity <input type="range" id="v3RadOp" min="0.2" max="3" step="0.1" value="1"></label>
     <label><input type="checkbox" id="v3Clouds" checked> clouds</label>
+    <label><input type="checkbox" id="v3WindLbl"> wind labels</label>
     <label><input type="checkbox" id="v3Follow" checked> follow clock</label>
     <label><input type="checkbox" id="v3Spin"> orbit camera</label>
   </div>
-  <div id="view3d"><div class="v3-readout" id="v3Readout"></div></div>
+  <div id="v3Home"><div id="view3d"><div class="v3-readout" id="v3Readout"></div></div></div>
   <div class="legend-row" id="v3Legend"></div>
 </section>
 

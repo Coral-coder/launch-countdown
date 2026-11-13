@@ -5,7 +5,7 @@ import { $, h, esc, num, pad2, parts, dur, utc, eastern, local, ago, parseT, get
 import { Countdown, now, syncClock, clockOffset, label } from './clock.js';
 import * as weather from './wx.js';
 import { initMap, showLaunch, mapShown } from './map.js';
-import { initTabs, showTab, currentTab, SAVER } from './tabs.js';
+import { initTabs, showTab, currentTab, setTerminal, SAVER } from './tabs.js';
 
 let data = null, launches = [], current = null, cd = null, scene3d = null;
 
@@ -51,6 +51,8 @@ function select(id, push = true) {
 const el = { mini: $('miniClock'), sign: $('ckSign'), d: $('ckD'), hh: $('ckH'), mm: $('ckM'), ss: $('ckS'), ms: $('ckMs'), clock: $('clock'), banner: $('stateBanner'), pill: $('statusPill') };
 const set = (node, text) => { if (node.textContent !== text) node.textContent = text; };
 
+const tel = { sign: $('tSign'), h: $('tH'), m: $('tM'), s: $('tS'), ms: $('tMs'), banner: $('tBanner'), clock: $('tClock') };
+
 function state() {
   const official = current.status?.name || '';
   if (noT0()) return ['tbd', 'NO FIRM T-0', `AWAITING A LAUNCH TIME · ${official.toUpperCase()}`];
@@ -75,9 +77,15 @@ function tick() {
     set(el.ms, '.' + String(p.ms).padStart(3, '0'));
   }
   const [cls, pill, banner] = state();
+  if (currentTab() === 'terminal') {
+    const p = parts(cd.t);
+    set(tel.sign, p.neg ? 'T-' : 'T+'); set(tel.h, pad2(p.d * 24 + p.h)); set(tel.m, pad2(p.m)); set(tel.s, pad2(p.s)); set(tel.ms, '.' + String(p.ms).padStart(3, '0'));
+    set(tel.banner, banner); tel.banner.className = `banner ${cls}`;
+    tel.clock.className = 'clock t-clock' + (cd.mode === 'hold' ? ' held' : cd.t >= 0 ? ' plus' : '');
+  }
   set(el.mini, noT0() ? 'T- TBD' : label(cd.t));
   el.mini.className = 'mini' + (cls === 'tbd' ? ' tbd' : cd.mode === 'hold' ? ' held' : cd.mode === 'scrub' ? ' scrubbed' : cd.t >= 0 ? ' plus' : '');
-  el.mini.hidden = currentTab() === 'countdown';
+  el.mini.hidden = currentTab() === 'countdown' || currentTab() === 'terminal';
   set(el.banner, banner); set(el.pill, pill);
   el.banner.className = `banner ${cls}`; el.pill.className = `pill ${cls}`;
   el.clock.className = 'clock' + (cls === 'tbd' ? ' tbd' : cd.mode === 'hold' ? ' held' : cd.mode === 'scrub' ? ' scrubbed' : cd.t >= 0 ? ' plus' : '');
@@ -227,6 +235,13 @@ function renderTimeline() {
   $('timeline').replaceChildren(...(items.length ? items.map((i) => h('div', { class: 'tl' + (i.t <= t ? ' done' : i === next ? ' next' : '') },
     h('span', { class: 't' }, label(i.t).slice(0, -4)), h('span', {}, i.name)))
     : [h('div', { class: 'note' }, 'No countdown timeline has been published for this launch.')]));
+  if (currentTab() !== 'terminal') return;
+  // terminal layout: its own copy of the timeline, kept scrolled to the next event
+  $('tNext').replaceChildren(...[...$('nextEvent').childNodes].map((n) => n.cloneNode(true)));
+  const box = $('tTimeline');
+  box.replaceChildren(...[...$('timeline').children].map((n) => n.cloneNode(true)));
+  const nx = box.querySelector('.next') || box.querySelector('.done:last-of-type');
+  if (nx) box.scrollTop = Math.max(0, nx.offsetTop - box.offsetTop - box.clientHeight / 3);
 }
 
 // ---------------------------------------------------------------- mission panels
@@ -264,6 +279,9 @@ function renderLaunch() {
   if ($('webcast').dataset.key !== vidKey) $('webcast').replaceChildren(yt ? h('iframe', { src: `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1&mute=1&playsinline=1`, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '', title: 'Launch webcast' })
     : h('div', { class: 'empty' }, vids.length ? 'The published stream cannot be embedded here. Use the links below.' : 'No webcast link published yet.'));
   $('webcast').dataset.key = vidKey;
+  videoSources = [yt ? ['Launch webcast', `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1&mute=1&playsinline=1`] : null, ['Pad & weather stream', $('padStream').dataset.src]].filter(Boolean);
+  $('tName').textContent = `${l.name} · ${l.rocket} · ${l.pad.name}`;
+  if (currentTab() === 'terminal') terminalVideo();
   $('webcastLinks').replaceChildren(...vids.map(([u, t]) => link(u, t)));
 
   // mission
@@ -379,9 +397,44 @@ onFeeds(() => {
 
 // ---------------------------------------------------------------- tabs and 3D view
 
+// ---- terminal count: from T-1 h to T+15 min the page switches to one fixed layout
+
+const TERMINAL_FROM = -3600e3, TERMINAL_TO = 900e3;
+let videoSources = [], videoPick = 0, videoShown = null, inTerminal = false, beforeTerminal = 'countdown', terminalView = null;
+
+function terminalVideo() {
+  const src = videoSources[Math.min(videoPick, videoSources.length - 1)];
+  $('tVidPick').replaceChildren(...(videoSources.length > 1 ? videoSources.map(([name], i) =>
+    h('button', { class: i === Math.min(videoPick, videoSources.length - 1) ? 'on' : '', onclick: () => { videoPick = i; terminalVideo(); } }, name)) : []));
+  if (!src || src[1] === videoShown) return;
+  videoShown = src[1];
+  $('tVideo').replaceChildren(h('iframe', { src: src[1], allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '', title: src[0] }));
+}
+
+function checkTerminal() {
+  const want = !!cd && !noT0() && cd.mode !== 'scrub' && cd.t >= TERMINAL_FROM && cd.t <= TERMINAL_TO;
+  if (want && !inTerminal) {
+    inTerminal = true; beforeTerminal = currentTab() === 'terminal' ? 'countdown' : currentTab();
+    setTerminal(true); showTab('terminal', false);
+  } else if (!want && inTerminal) {
+    inTerminal = false; setTerminal(false);
+    if (currentTab() === 'terminal') showTab(beforeTerminal, false);
+  }
+  // corridor view: close on the pad until liftoff, then pull back to follow the ascent
+  if (inTerminal && scene3d && currentTab() === 'terminal') {
+    const v = cd.t >= 0 ? 'chase' : 'clouds';
+    if (v !== terminalView) { terminalView = v; scene3d.setView(v); }
+  }
+}
+
 async function tabShown(name) {
   if (name === 'map') mapShown();
-  if (name === '3d') {
+  // the 3D canvas lives in whichever of the two layouts is on screen
+  const slot = name === 'terminal' ? $('tCorridor') : $('v3Home');
+  if ($('view3d').parentNode !== slot) slot.append($('view3d'));
+  if (name === 'terminal') { terminalView = null; terminalVideo(); renderTimeline(); }
+  else if (videoShown) { videoShown = null; $('tVideo').replaceChildren(); } // stop playback when leaving
+  if (name === '3d' || name === 'terminal') {
     if (!scene3d) {
       try {
         scene3d = await import('./scene3d.js');
@@ -389,7 +442,7 @@ async function tabShown(name) {
         if (current) scene3d.setLaunch(current);
       } catch (e) { $('v3Readout').textContent = `3D view unavailable: ${e.message}`; scene3d = null; return; }
     }
-    if (currentTab() === '3d') scene3d.show();
+    if (currentTab() === '3d' || currentTab() === 'terminal') scene3d.show();
   } else scene3d?.hide();
 }
 
@@ -418,7 +471,7 @@ requestAnimationFrame(tick);
 setInterval(() => {
   const d = new Date(now());
   $('utcClock').textContent = `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
-  if (cd) renderFacts();
+  if (cd) { renderFacts(); checkTerminal(); }
 }, 1000);
 setInterval(loadData, 60_000);
 setInterval(renderSchedule, 30_000);

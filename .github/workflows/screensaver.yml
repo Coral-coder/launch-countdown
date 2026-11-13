@@ -1,9 +1,7 @@
 name: Build Windows screensaver
 
+# Manual only: run it from the Actions tab (or ask for a build) when a new screensaver should ship.
 on:
-  push:
-    branches: [main]
-    paths: ["screensaver/**", ".github/workflows/screensaver.yml"]
   workflow_dispatch:
 
 permissions:

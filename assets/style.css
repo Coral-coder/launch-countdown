@@ -86,7 +86,8 @@ main { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
 .panel { max-width: 1700px; margin: 0 auto; }
 .panel:not(.on) { display: none !important; }
 .panel.fill.on { display: flex; flex-direction: column; height: 100%; max-width: none; }
-.panel.fill #map, .panel.fill #view3d { flex: 1; min-height: 260px; height: auto; }
+.panel.fill #map, .panel.fill #v3Home { flex: 1; min-height: 260px; height: auto; }
+#v3Home, #tCorridor { display: flex; min-height: 0; } #v3Home > #view3d, #tCorridor > #view3d { flex: 1; min-height: 0; }
 .panel > .card + .card, .panel > .grid + .card { margin-top: 16px; }
 .hero { margin: 0; min-height: 100%; display: grid; align-items: center; }
 #view3d { position: relative; border-radius: 8px; overflow: hidden; background: #060709; }
@@ -223,3 +224,19 @@ footer { max-width: 1500px; margin: 0 auto; padding: 16px; color: var(--muted); 
 .saver, .saver * { cursor: none !important; }
 .saver .controls, .saver .show, .saver #launchSelect, .saver .panel[data-tab=live] { display: none !important; }
 .saver .brand { margin-right: auto; }
+
+/* ---------- terminal count layout: count on top, corridor left, video and timeline right ---------- */
+.panel.terminal.on { display: grid; height: 100%; max-width: none; gap: 12px;
+  grid-template: "count count" auto "left right" minmax(0, 1fr) / minmax(0, 1.25fr) minmax(0, 1fr); }
+.t-count { grid-area: count; text-align: center; }
+.t-name { color: var(--ink2); font-size: 14px; letter-spacing: .04em; }
+.t-clock { font-size: clamp(30px, 6.2vw, 88px); margin: 2px 0 8px; }
+.t-count .next-event { margin-top: 6px; }
+.t-left { grid-area: left; display: flex; min-height: 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
+.t-left #tCorridor { flex: 1; }
+.t-right { grid-area: right; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.t-video { padding: 10px; } .t-video .range-row { margin-bottom: 8px; } .t-video .range-row:empty { display: none; }
+.t-tl { flex: 1; min-height: 0; display: flex; flex-direction: column; } .t-tl .timeline { flex: 1; overflow-y: auto; }
+#tabs button[data-tab=terminal] { color: var(--warn); font-weight: 700; } #tabs button[data-tab=terminal][aria-selected=true] { background: var(--warn); color: #0b0b0b; }
+@media (max-width: 900px) { .panel.terminal.on { display: block; height: auto; } .t-left { height: 46vh; margin: 12px 0; } .t-tl .timeline { max-height: 40vh; } }
+.t-left .v3-readout { font-size: 11px; line-height: 1.4; }

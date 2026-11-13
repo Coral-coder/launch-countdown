@@ -19,8 +19,16 @@ if (SAVER) {
 let panels = [], onShow = () => {}, shownAt = performance.now();
 export const currentTab = () => ui.tab;
 
+// The terminal-count tab only exists inside the T-1 h window; main.js switches it on and off.
+let terminal = false;
+export function setTerminal(on) {
+  terminal = on;
+  const b = $('tabs').querySelector('[data-tab=terminal]');
+  if (b) b.hidden = !on;
+}
+
 export function showTab(name, user = true) {
-  if (!panels.some((p) => p.dataset.tab === name)) name = panels[0].dataset.tab;
+  if (!panels.some((p) => p.dataset.tab === name) || (name === 'terminal' && !terminal)) name = 'countdown';
   ui.tab = name; save();
   panels.forEach((p) => p.classList.toggle('on', p.dataset.tab === name));
   [...$('tabs').children].forEach((b) => {
@@ -35,7 +43,7 @@ export function showTab(name, user = true) {
 }
 
 function step(dir = 1) {
-  const names = panels.map((p) => p.dataset.tab), pool = names.filter((n) => !ui.skip.includes(n));
+  const names = panels.map((p) => p.dataset.tab).filter((n) => n !== 'terminal'), pool = names.filter((n) => !ui.skip.includes(n));
   const list = pool.length ? pool : names;
   // From a tab that is not in the rotation, move to the nearest one that is.
   const at = names.indexOf(ui.tab);
@@ -55,7 +63,7 @@ export function initTabs(cb) {
   onShow = cb;
   panels = [...document.querySelectorAll('.panel')].filter((p) => !(SAVER && p.dataset.tab === 'live'));
   $('tabs').replaceChildren(...panels.map((p) => h('button', { role: 'tab', 'data-tab': p.dataset.tab, onclick: () => showTab(p.dataset.tab) }, p.dataset.label)));
-  $('showTabs').replaceChildren(...panels.map((p) => {
+  $('showTabs').replaceChildren(...panels.filter((p) => p.dataset.tab !== 'terminal').map((p) => {
     const box = h('input', { type: 'checkbox' }); box.checked = !ui.skip.includes(p.dataset.tab);
     box.addEventListener('change', () => { ui.skip = box.checked ? ui.skip.filter((n) => n !== p.dataset.tab) : [...ui.skip, p.dataset.tab]; save(); });
     return h('label', {}, box, p.dataset.label);
@@ -71,6 +79,7 @@ export function initTabs(cb) {
   document.addEventListener('click', (e) => { if (!e.target.closest('#showPick')) $('showPick').open = false; });
   setInterval(() => {
     if (!ui.on) return;
+    if (ui.tab === 'terminal') { $('showBar').style.width = '0'; shownAt = performance.now(); return; } // the terminal count holds the screen
     // Hold the slide while a dialog is open or the page is in the background.
     if (document.querySelector('dialog[open]') || document.hidden) { shownAt = performance.now(); return; }
     const f = (performance.now() - shownAt) / (ui.secs * 1000);
@@ -78,5 +87,6 @@ export function initTabs(cb) {
     if (f >= 1) step(1);
   }, 100);
   setRunning(ui.on);
+  setTerminal(false);
   showTab(location.hash.slice(1) || ui.tab, false);
 }
