@@ -91,6 +91,7 @@ def aircraft(cs: list[dict]) -> list[dict]:
             alt = a.get("alt_geom", a.get("alt_baro"))
             out.append({
                 "id": a["hex"], "name": (a.get("flight") or a.get("r") or a["hex"]).strip(), "type": a.get("t"),
+                "cat": a.get("category"),
                 "lat": round(a["lat"], 5), "lon": round(a["lon"], 5),
                 "alt_ft": 0 if alt in (None, "ground") else alt, "ground": alt == "ground",
                 "kt": a.get("gs"), "track": a.get("track"), "fpm": a.get("geom_rate", a.get("baro_rate")),

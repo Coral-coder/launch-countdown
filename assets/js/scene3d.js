@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { $, h, destination, getJSON, utc, num, compass } from './util.js';
 import { wx, onWx } from './wx.js';
 import { now } from './clock.js';
@@ -371,11 +372,104 @@ async function loadClouds() {
 
 // Snapshots written by the deploy workflow (scripts/fetch_traffic.py): the sources cannot be read
 // from a browser, so positions are a few minutes old and are dead-reckoned forward from there.
-const AIR = 0x5fd0ff, SEA = 0x6fe36f, NOTAM = 0xffd21f, NOTMAR = 0xff5a36;
+const AIR = 0xb4b8bc, // aircraft are a neutral 70% white so the alert colours stand out
+   SEA = 0x6fe36f, NOTAM = 0xffd21f, NOTMAR = 0xff5a36;
 const TRACK_CAP_KM = 25;      // a projected track is never drawn longer than this
 const TRAFFIC_KM = 220;       // only traffic this close to the pad is drawn
+const SIZE = 0.01;            // model size as a fraction of its distance from the camera
 const STALE_MIN = 20;         // aircraft older than this are dropped; vessels move slowly enough to keep
 let traffic = null, hazards = null, trafficGroup = null, movers = [], trafficNote = 'traffic snapshot loading…', lastMove = 0;
+
+// Small 3D models, built once and shared. All point along -Z with +Y up, about two units long.
+const GEO = {};                       // light, jet, heli, boat
+const shared = (g) => Object.values(GEO).includes(g);
+function models() {
+  if (GEO.light) return;
+  const part = (g, x, y, z, rx = 0, rz = 0) => { if (rx) g.rotateX(rx); if (rz) g.rotateZ(rz); g.translate(x, y, z); return g.index ? g.toNonIndexed() : g; };
+  // flat plate cut from a top-view outline (x across, y aft), laid horizontal
+  const plate = (pts, y = 0, thick = 0.04) => part(new THREE.ExtrudeGeometry(new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, z))), { depth: thick, bevelEnabled: false }), 0, y + thick / 2, 0, Math.PI / 2);
+  const done = (parts) => { const g = mergeGeometries(parts); g.computeVertexNormals(); return g; };
+
+  // light propeller aircraft: straight high wing
+  GEO.light = done([
+    part(new THREE.CylinderGeometry(0.13, 0.1, 1.5, 10), 0, 0, 0.05, Math.PI / 2),
+    part(new THREE.ConeGeometry(0.13, 0.3, 10), 0, 0, -0.85, -Math.PI / 2),
+    part(new THREE.BoxGeometry(2.0, 0.05, 0.4), 0, 0.12, -0.15),
+    part(new THREE.BoxGeometry(0.76, 0.05, 0.24), 0, 0.02, 0.68),
+    part(new THREE.BoxGeometry(0.05, 0.4, 0.3), 0, 0.2, 0.68),
+  ]);
+  // airliner: long fuselage, swept wings, engines under the wings, swept tail. Heavies get four engines.
+  const engine = (x, z) => part(new THREE.CylinderGeometry(0.07, 0.07, 0.34, 8), x, -0.13, z, Math.PI / 2);
+  const airliner = (pods) => done([
+    part(new THREE.CylinderGeometry(0.14, 0.14, 1.7, 12), 0, 0, 0, Math.PI / 2),
+    part(new THREE.ConeGeometry(0.14, 0.34, 12), 0, 0, -1.02, -Math.PI / 2),
+    part(new THREE.ConeGeometry(0.14, 0.5, 12), 0, 0.03, 1.1, Math.PI / 2),
+    plate([[0, -0.38], [1.05, 0.3], [1.05, 0.46], [0.14, 0.18], [-0.14, 0.18], [-1.05, 0.46], [-1.05, 0.3]], -0.06),
+    plate([[0, 0.78], [0.42, 1.12], [0.42, 1.22], [0, 1.08], [-0.42, 1.22], [-0.42, 1.12]], 0.04),
+    part(new THREE.BoxGeometry(0.04, 0.46, 0.34), 0, 0.26, 1.02, -0.5),
+    ...pods.flatMap(([x, z]) => [engine(x, z), engine(-x, z)]),
+  ]);
+  GEO.jet = airliner([[0.38, -0.12]]);
+  GEO.heavy = airliner([[0.34, -0.14], [0.68, 0.08]]);
+  // business jet: slim fuselage, low swept wing, engines on the rear fuselage, T-tail
+  GEO.bizjet = done([
+    part(new THREE.CylinderGeometry(0.11, 0.11, 1.4, 10), 0, 0, 0, Math.PI / 2),
+    part(new THREE.ConeGeometry(0.11, 0.4, 10), 0, 0, -0.9, -Math.PI / 2),
+    part(new THREE.ConeGeometry(0.11, 0.4, 10), 0, 0.02, 0.9, Math.PI / 2),
+    plate([[0, -0.2], [0.85, 0.3], [0.85, 0.42], [0.1, 0.2], [-0.1, 0.2], [-0.85, 0.42], [-0.85, 0.3]], -0.08),
+    part(new THREE.BoxGeometry(0.04, 0.44, 0.3), 0, 0.26, 0.85, -0.45),
+    plate([[0, 0.86], [0.36, 1.06], [0.36, 1.14], [0, 1.04], [-0.36, 1.14], [-0.36, 1.06]], 0.44),
+    part(new THREE.CylinderGeometry(0.06, 0.06, 0.34, 8), 0.2, 0.06, 0.5, Math.PI / 2),
+    part(new THREE.CylinderGeometry(0.06, 0.06, 0.34, 8), -0.2, 0.06, 0.5, Math.PI / 2),
+  ]);
+  // helicopter: pod, tail boom, tail rotor fin, crossed main rotor blades, skids
+  const pod = new THREE.SphereGeometry(0.3, 12, 10); pod.scale(0.85, 0.85, 1.5);
+  GEO.heli = done([
+    part(pod, 0, 0, -0.25),
+    part(new THREE.CylinderGeometry(0.05, 0.03, 1.0, 8), 0, 0.06, 0.55, Math.PI / 2),
+    part(new THREE.BoxGeometry(0.04, 0.34, 0.16), 0, 0.2, 1.02),
+    part(new THREE.CylinderGeometry(0.03, 0.03, 0.2, 6), 0, 0.33, -0.2),
+    part(new THREE.BoxGeometry(2.0, 0.02, 0.1), 0, 0.44, -0.2),
+    part(new THREE.BoxGeometry(0.1, 0.02, 2.0), 0, 0.44, -0.2),
+    part(new THREE.BoxGeometry(0.04, 0.04, 0.9), 0.24, -0.33, -0.2),
+    part(new THREE.BoxGeometry(0.04, 0.04, 0.9), -0.24, -0.33, -0.2),
+  ]);
+  // vessels
+  const hull = (beam, thick) => plate([[0, -1], [beam * 0.9, -0.62], [beam, 0.95], [-beam, 0.95], [-beam * 0.9, -0.62]], 0, thick);
+  const house = (w, hgt, len, y, z) => part(new THREE.BoxGeometry(w, hgt, len), 0, y, z);
+  const funnel = (z) => part(new THREE.CylinderGeometry(0.05, 0.06, 0.22, 8), 0, 0.7, z);
+  GEO.boat = done([
+    plate([[0, -1], [0.3, -0.45], [0.34, 0.9], [-0.34, 0.9], [-0.3, -0.45]], 0, 0.28),
+    house(0.44, 0.3, 0.5, 0.43, 0.5), part(new THREE.CylinderGeometry(0.03, 0.03, 0.5, 6), 0, 0.55, -0.1),
+  ]);
+  GEO.cargo = done([hull(0.24, 0.22), house(0.36, 0.2, 0.5, 0.32, -0.42), house(0.36, 0.26, 0.5, 0.35, 0.13), house(0.4, 0.4, 0.2, 0.42, 0.78), funnel(0.9)]); // container stacks, bridge aft
+  GEO.tanker = done([hull(0.26, 0.2), house(0.07, 0.07, 1.25, 0.24, -0.1), house(0.3, 0.05, 0.08, 0.26, -0.5), house(0.3, 0.05, 0.08, 0.26, 0.1), house(0.42, 0.4, 0.2, 0.4, 0.78), funnel(0.9)]); // flat deck with pipework
+  GEO.liner = done([hull(0.25, 0.22), house(0.42, 0.26, 1.4, 0.35, 0.05), house(0.36, 0.14, 1.15, 0.55, 0.1), funnel(0.45)]);                                // tall full-length superstructure
+  const sail = new THREE.ExtrudeGeometry(new THREE.Shape([[0, 0], [0.62, 0], [0, 1.25]].map(([x, y]) => new THREE.Vector2(x, y))), { depth: 0.02, bevelEnabled: false });
+  sail.rotateY(-Math.PI / 2); sail.translate(0.01, 0.3, -0.12);
+  GEO.sail = done([plate([[0, -0.9], [0.2, -0.3], [0.2, 0.75], [-0.2, 0.75], [-0.2, -0.3]], 0, 0.2), part(new THREE.CylinderGeometry(0.02, 0.02, 1.35, 6), 0, 0.85, -0.14), sail.toNonIndexed()]);
+}
+
+/** Model and relative size for a vessel, from its AIS ship type when one was heard. */
+function vesselKind(v) {
+  const t = v.ship_type || 0;
+  if (t === 36) return ['sail', 0.8];
+  if (t >= 60 && t <= 69) return ['liner', 1.35];
+  if (t >= 70 && t <= 79) return ['cargo', 1.4];
+  if (t >= 80 && t <= 89) return ['tanker', 1.4];
+  return ['boat', 0.75];
+}
+
+/** Model and relative size for an aircraft: ADS-B emitter category first, then type code, then how it is flying. */
+function aircraftKind(v) {
+  const t = (v.type || '').toUpperCase(), cat = v.cat || '';
+  if (cat === 'A7' || /^(H\d|EC\d|AS\d|B06|B40[79]|B41|B42|B43|R22|R44|R66|S6[14]|S7[06]|S92|UH|AH|CH|MH|MD[569]|A109|A119|A139|A169|AW|BK17|B505|EN[24]8)/.test(t)) return ['heli', 0.85];
+  if (cat === 'A5' || /^(B74|B77|B78|A33|A34|A35|A38|MD11|DC10|C17|C5M|K35|KC|B52|A124|IL76)/.test(t)) return ['heavy', 1.5];
+  if (/^(C5[0-9]|C6[0-9]|C7[0-9]|C25|GL|G[1-6]\d\d|GLF|LJ|F2T|F9|FA|H25|HA4|PC24|E35|E55|E50|CL[36]|BE40|PRM)/.test(t)) return ['bizjet', 0.85];
+  if (/^A[346]$/.test(cat) || /^(B7[0-9]|B3[0-9]|A[23]\d|A1[49]|BCS|E1[3-9]|E[27]\d|CRJ|MD[18]|DC|F1[568]|F22|F35|T38)/.test(t)) return ['jet', 1.15];
+  if ((v.kt || 0) > 260 || (v.alt_ft || 0) > 24000) return ['jet', 1.15];
+  return ['light', 0.8];
+}
 
 const kmBetween = (a, b, c, d) => { const x = rad(d - b) * Math.cos(rad((a + c) / 2)), y = rad(c - a); return Math.hypot(x, y) * R; };
 function inRing(lat, lon, ring) {
@@ -385,6 +479,14 @@ function inRing(lat, lon, ring) {
     if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
   }
   return inside;
+}
+// The launch corridor's footprint on the surface: from the pad to 500 km downrange, widening with distance.
+const CORRIDOR_KM = 500, corridorHalf = (along) => 8 + 0.06 * along;
+function inCorridor(lat, lon) {
+  const { lat: la0, lon: lo0 } = launch.pad, h = rad(heading());
+  const dx = rad(lon - lo0) * Math.cos(rad(la0)) * R, dy = rad(lat - la0) * R;
+  const along = dx * Math.sin(h) + dy * Math.cos(h), cross = Math.abs(dx * Math.cos(h) - dy * Math.sin(h));
+  return along >= -3 && along <= CORRIDOR_KM && cross <= corridorHalf(Math.max(0, along));
 }
 const hhmm = (iso) => (iso ? new Date(iso).toISOString().slice(11, 16) + 'Z' : '?');
 
@@ -404,12 +506,15 @@ function activeAreas() {
 
 function buildTraffic() {
   if (!root || !launch || launch.pad.lat == null) return;
-  if (trafficGroup) { root.remove(trafficGroup); trafficGroup.traverse((o) => { o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.dispose(); } }); }
-  trafficGroup = new THREE.Group(); movers = [];
+  if (trafficGroup) { root.remove(trafficGroup); trafficGroup.traverse((o) => { if (!shared(o.geometry)) o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.dispose(); } }); }
+  trafficGroup = new THREE.Group(); movers = []; models();
   root.add(trafficGroup);
   const areas = activeAreas(), g = trafficGroup;
 
   if ($('v3Haz').checked) {
+    // corridor footprint on the surface, the zone the forecast check uses
+    const edge = (side) => { const pts = []; for (let d = 0; d <= CORRIDOR_KM; d += 25) { const [la, lo] = destination(...destination(launch.pad.lat, launch.pad.lon, heading(), d), heading() + 90 * side, corridorHalf(d)); const [x, z] = proj(la, lo); pts.push(new THREE.Vector3(x, 0.12, z)); } return pts; };
+    const foot = line([...edge(1), ...edge(-1).reverse(), edge(1)[0]], TRACK, 0.55); foot.material.depthTest = false; foot.renderOrder = 7; g.add(foot);
     for (const a of areas) {
       const color = a.kind === 'notam' ? NOTAM : NOTMAR, dim = a.live ? 1 : 0.45;
       const y0 = (a.floor_ft || 0) * 0.0003048 * ex, y1 = (a.kind === 'notam' ? Math.min(20, (a.ceil_ft ?? 65000) * 0.0003048) : 0.25) * ex;
@@ -428,26 +533,37 @@ function buildTraffic() {
     }
   }
 
-  const snapAge = traffic ? (now() - Date.parse(traffic.generated_at)) / 6e4 : null;
   const add = (v, sea) => {
     const { lat, lon } = launch.pad;
     if (v.lat == null || kmBetween(lat, lon, v.lat, v.lon) > TRAFFIC_KM) return;
     if (!sea && (v.ground || (now() / 1000 - v.t) / 60 > STALE_MIN)) return;
     const color = sea ? SEA : AIR;
-    const icon = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.5, sea ? 4 : 8), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false }));
-    icon.renderOrder = 7; icon.userData.fixed = 0.007;
+    // Lit models, drawn after the weather volumes so they stay visible through cloud and radar.
+    const [kind, rel] = sea ? vesselKind(v) : aircraftKind(v), size = SIZE * rel;
+    const icon = new THREE.Mesh(GEO[kind], new THREE.MeshLambertMaterial({ color, transparent: true }));
+    icon.renderOrder = 7; icon.userData.fixed = size;
+    // a stalk down to the surface makes an aircraft's height readable from any angle
+    const stalk = sea ? null : new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.28, depthTest: false }));
+    if (stalk) { stalk.renderOrder = 7; g.add(stalk); }
     const track = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.5, depthTest: false })); track.renderOrder = 7;
-    const ticks = [0, 1].map(() => { const m = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 8), new THREE.MeshBasicMaterial({ color, transparent: true, depthTest: false })); m.userData.fixed = 0.0022; m.renderOrder = 7; return m; });
+    // 5 minutes ahead: a tick across the track. 10 minutes ahead: an X.
+    const mark = (pts) => { const m = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts.map(([x, z]) => new THREE.Vector3(x, 0, z))), track.material); m.userData.fixed = 0.007; m.renderOrder = 7; return m; };
+    const ticks = [mark([[-1, 0], [1, 0]]), mark([[-1, -1], [1, 1], [-1, 1], [1, -1]])];
     g.add(icon, track, ...ticks);
-    movers.push({ v, sea, icon, track, ticks, tag: null, inside: false });
+    movers.push({ v, sea, icon, track, ticks, stalk, size, tag: null, inside: false, state: 0 });
   };
   if ($('v3Air').checked) (traffic?.aircraft || []).forEach((v) => add(v, false));
   if ($('v3Sea').checked) (traffic?.vessels || []).forEach((v) => add(v, true));
   moveTraffic(areas);
+}
+
+/** The traffic lines in the readout; refreshed whenever positions are, so the counts follow the clock. */
+function noteTraffic(areas) {
+  const snapAge = traffic ? (now() - Date.parse(traffic.generated_at)) / 6e4 : null;
   const n = (sea) => movers.filter((m) => m.sea === sea).length;
   trafficNote = !traffic ? 'traffic snapshot unavailable'
     : `traffic  ${n(false)} aircraft · ${n(true)} vessels · ${Math.round(snapAge)} min old\n` +
-      `hazards  ${areas.filter((a) => a.kind === 'notam').length} NOTAM · ${areas.filter((a) => a.kind === 'notmar').length} NOTMAR · ${movers.filter((m) => m.inside).length} inside` +
+      `hazards  ${areas.filter((a) => a.kind === 'notam').length} NOTAM · ${areas.filter((a) => a.kind === 'notmar').length} NOTMAR · ${movers.filter((m) => m.state === 2).length} inside · ${movers.filter((m) => m.state === 1).length} inbound` +
       (snapAge > STALE_MIN ? '\n         snapshot too old to show aircraft' : '') +
       ((traffic.notes || []).some((x) => /AIS/.test(x)) ? '\n         no AIS key set: vessels off' : '') +
       ((hazards?.notes || []).length && !areas.some((a) => a.kind === 'notmar') ? '\n         maritime warnings unavailable' : '');
@@ -456,6 +572,7 @@ function buildTraffic() {
 /** Dead-reckon every aircraft and vessel to the present and redraw its projected track. */
 function moveTraffic(areas = activeAreas()) {
   const live = areas.filter((a) => a.live), tNow = now() / 1000;
+  const clock = tGetter(), toT0 = clock == null ? null : -clock / 6e4, t0ms = clock == null ? null : now() - clock; // minutes to T-0, and T-0 itself
   for (const m of movers) {
     const { v, sea } = m, kt = v.kt || 0, hasTrack = v.track != null && kt > 0.3;
     const kmPerMin = kt * 1.852 / 60, age = Math.max(0, (tNow - v.t) / 60);
@@ -467,34 +584,43 @@ function moveTraffic(areas = activeAreas()) {
     };
     const here = at(0);
     m.icon.position.copy(here.p);
-    if (hasTrack) {
-      const a = rad(v.track);
-      m.icon.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(Math.sin(a), 0, -Math.cos(a)));
-    }
+    const hdg = hasTrack ? v.track : v.heading;
+    if (hdg != null) m.icon.rotation.y = -rad(hdg);
+    if (m.stalk) m.stalk.geometry.setFromPoints([here.p, new THREE.Vector3(here.p.x, 0, here.p.z)]);
     // Projected track: ten minutes ahead, cut short for anything fast so the picture stays readable.
     const horizon = hasTrack ? Math.min(10, TRACK_CAP_KM / kmPerMin) : 0;
     m.track.visible = horizon > 0;
     if (horizon > 0) m.track.geometry.setFromPoints([here.p, at(horizon / 2).p, at(horizon).p]);
-    [5, 10].forEach((min, i) => { m.ticks[i].visible = horizon >= min; if (horizon >= min) m.ticks[i].position.copy(at(min).p); });
-    if (horizon > 0 && horizon < 5) { m.ticks[0].visible = true; m.ticks[0].position.copy(at(horizon).p); }
-    // Inside a hazard area: vessels against maritime areas, aircraft against airspace within its altitudes.
-    const was = m.inside;
-    m.inside = live.some((ar) => (sea ? ar.kind === 'notmar' : ar.kind === 'notam' && here.altFt >= (ar.floor_ft || 0) && here.altFt <= (ar.ceil_ft ?? Infinity))
-      && ar.rings.some((r) => inRing(here.la, here.lo, r)));
-    if (m.inside !== was || (m.inside && !m.tag)) {
+    [5, 10].forEach((min, i) => { m.ticks[i].visible = horizon >= min; if (horizon >= min) { m.ticks[i].position.copy(at(min).p); m.ticks[i].rotation.y = -rad(v.track); } });
+    if (horizon > 0 && horizon < 5) { m.ticks[0].visible = true; m.ticks[0].position.copy(at(horizon).p); m.ticks[0].rotation.y = -rad(v.track); } // too fast for 5 minutes: tick where the track ends
+    // State 2: inside a hazard area or the launch corridor right now (flashes red / yellow).
+    // State 1: on course to be inside one at T-0 (flashes red). Vessels are checked against maritime
+    // areas and aircraft against airspace within its altitudes; both against the corridor footprint.
+    const hit = (pos, list) => inCorridor(pos.la, pos.lo) || list.some((ar) => (sea ? ar.kind === 'notmar' : ar.kind === 'notam' && pos.altFt >= (ar.floor_ft || 0) && pos.altFt <= (ar.ceil_ft ?? Infinity))
+      && ar.rings.some((r) => inRing(pos.la, pos.lo, r)));
+    let state = hit(here, live) ? 2 : 0;
+    // A straight-line forecast is only meaningful a short way ahead: three hours for a ship, twenty minutes for an aircraft.
+    if (!state && hasTrack && toT0 != null && toT0 > 0 && toT0 <= (sea ? 180 : 20)) {
+      if (hit(at(toT0), areas.filter((ar) => (!ar.from || Date.parse(ar.from) <= t0ms) && (!ar.to || Date.parse(ar.to) >= t0ms)))) state = 1;
+    }
+    if (state !== m.state || (state && !m.tag)) {
       if (m.tag) { trafficGroup.remove(m.tag); m.tag.material.map.dispose(); m.tag.material.dispose(); m.tag = null; }
-      m.icon.userData.fixed = m.inside ? 0.018 : 0.007;
-      m.track.material.opacity = m.inside ? 1 : 0.5;
-      if (m.inside) { m.tag = label(`${v.name || v.id}${sea ? '' : ' · ' + Math.round(here.altFt / 100) * 100 + ' ft'} · ${Math.round(kt)} kt`, here.p, { color: '#ffe11a', size: 10 }); trafficGroup.add(m.tag); }
-      else { const c = sea ? SEA : AIR; m.icon.material.color.set(c); m.track.material.color.set(c); }
+      m.state = state; m.inside = state === 2;
+      m.icon.userData.fixed = state ? Math.max(m.size, SIZE) * 2 : m.size;
+      m.track.material.opacity = state ? 1 : 0.5;
+      if (state) {
+        m.tag = label(`${v.name || v.id}${sea ? '' : ' · ' + Math.round(here.altFt / 100) * 100 + ' ft'} · ${Math.round(kt)} kt${state === 1 ? ' · in the area at T-0' : ''}`, here.p, { color: state === 2 ? '#ffe11a' : '#ff8a8a', size: 10 });
+        trafficGroup.add(m.tag);
+      } else { const c = sea ? SEA : AIR; m.icon.material.color.set(c); m.track.material.color.set(c); }
     }
     if (m.tag) m.tag.position.copy(here.p);
   }
+  noteTraffic(areas);
 }
 
 function rebuild() {
   if (!scene || !launch || launch.pad.lat == null) return;
-  if (root) { scene.remove(root); root.traverse((o) => { o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.uniforms?.map?.value.dispose(); o.material.uniforms?.lut?.value.dispose(); o.material.dispose(); } }); }
+  if (root) { scene.remove(root); root.traverse((o) => { if (!shared(o.geometry)) o.geometry?.dispose(); if (o.material) { o.material.map?.dispose(); o.material.uniforms?.map?.value.dispose(); o.material.uniforms?.lut?.value.dispose(); o.material.dispose(); } }); }
   root = new THREE.Group(); cloudMesh = null; radarMesh = null;
   root.add(ground(5, 5, -0.4), ground(8, 5, 0));
   const ascent = new THREE.Group();
@@ -543,7 +669,8 @@ function frame(ms) {
   if (ms - lastMove > 2000) { lastMove = ms; moveTraffic(); }
   // anything inside a hazard area flashes red / yellow
   const flash = Math.floor(ms / 280) % 2 ? 0xff2a2a : 0xffe11a;
-  for (const m of movers) if (m.inside) { m.icon.material.color.set(flash); m.track.material.color.set(flash); }
+  const warn = Math.floor(ms / 280) % 2 ? 0xff2a2a : 0x5a0c0c;
+  for (const m of movers) if (m.state) { const c = m.state === 2 ? flash : warn; m.icon.material.color.set(c); m.track.material.color.set(c); }
   root.traverse((o) => { if (o.userData.fixed) o.scale.setScalar(camera.position.distanceTo(o.position) * o.userData.fixed); });
   const tm = telemetry(t);
   if (lastView === 'chase') {
@@ -637,6 +764,8 @@ export function init(getT) {
   renderer.setClearColor(0x060709);
   el.append(renderer.domElement);
   scene = new THREE.Scene(); scene.fog = new THREE.Fog(0x060709, 2500, 7000);
+  const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(0.4, 1, 0.3); // lights only affect the plane and boat models
+  scene.add(new THREE.AmbientLight(0xffffff, 1.5), sun);
   camera = new THREE.PerspectiveCamera(42, 1, 1, 12000);
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; controls.maxPolarAngle = Math.PI / 2 - 0.02; controls.minDistance = 15; controls.maxDistance = 5000; controls.autoRotateSpeed = 0.6;
@@ -659,15 +788,29 @@ export function init(getT) {
     h('span', {}, h('i', { style: 'background:#fab219' }), 'Modelled ascent corridor: generic two-stage profile flown along the published azimuth, not provider trajectory data'),
     h('span', {}, h('i', { style: 'background:#f0efec' }), 'Clouds: forecast-model cloud fraction on 14 pressure levels, ray-marched; fine texture is synthetic'),
     h('span', {}, h('i', { style: 'background:#7fb2f5' }), 'Wind arrows over the pad point downwind, length by speed'),
-    h('span', {}, h('i', { style: 'background:#5fd0ff' }), 'Aircraft and ', h('i', { style: 'background:#6fe36f' }), 'vessels, dead-reckoned from the last snapshot, with a track to where they will be in 10 minutes (dots at 5 and 10; shortened for anything fast)'),
-    h('span', {}, h('i', { style: 'background:#ffd21f' }), 'NOTAM airspace and ', h('i', { style: 'background:#ff5a36' }), 'NOTMAR sea areas; traffic inside an area that is active or starts within two hours flashes red and yellow'),
-    h('span', {}, 'Drag to orbit, scroll to zoom, right-drag to pan. Drag the telemetry box to move it; double-click it to put it back.'));
+    h('span', {}, h('i', { style: 'background:#5fd0ff' }), 'Aircraft as miniatures of their type (light plane, business jet, airliner, heavy, helicopter), with a line down to the surface, and ', h('i', { style: 'background:#6fe36f' }), 'vessels (boat, cargo ship, tanker, passenger ship, sailing boat), dead-reckoned from the last snapshot, with a track to where they will be in 10 minutes (tick at 5 minutes, X at 10; shortened for anything fast)'),
+    h('span', {}, h('i', { style: 'background:#ffd21f' }), 'NOTAM airspace and ', h('i', { style: 'background:#ff5a36' }), 'NOTMAR sea areas, plus the corridor footprint on the surface. Inside one now: flashes red and yellow. On course to be inside one at T-0: flashes red'),
+    h('span', {}, 'Drag to orbit, scroll to zoom, right-drag to pan. Drag the telemetry box to move it; double-click it to put it back. Settings are under the gear.'));
   onWx(() => { if (shown && launch) { loadClouds(); } });
   setInterval(() => shown && loadClouds(), 15 * 6e4);
   setInterval(() => shown && loadRadar(), 2 * 6e4);
   setInterval(() => shown && loadTraffic(), 6e4);
   for (const id of ['v3Air', 'v3Sea', 'v3Haz']) $(id).addEventListener('change', buildTraffic);
   readoutControls();
+  // The gear and Key buttons fade out after a few seconds without input, and any open menu closes.
+  const host = $('view3d'), menus = [$('v3Menu'), $('v3KeyMenu')];
+  let idle = 0;
+  const wake = () => {
+    host.classList.remove('idle'); clearTimeout(idle);
+    idle = setTimeout(() => {
+      if (host.querySelector('.v3-pop select:focus')) { wake(); return; } // a dropdown is open
+      menus.forEach((m) => { m.open = false; }); host.classList.add('idle');
+    }, 5000);
+  };
+  for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'input', 'change']) host.addEventListener(ev, wake, { passive: true });
+  menus.forEach((m) => m.addEventListener('toggle', () => { if (m.open) menus.forEach((o) => { if (o !== m) o.open = false; }); }));
+  host.addEventListener('pointerdown', (e) => { if (!e.target.closest('.v3-pop')) menus.forEach((m) => { m.open = false; }); });
+  wake();
 }
 
 // ---- the telemetry overlay can be hidden, or dragged anywhere inside the view (double-click to put it back)

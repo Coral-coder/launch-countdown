@@ -112,27 +112,41 @@
 </section>
 
 <section class="panel card fill" data-tab="3d" data-label="3D Radar &amp; Ascent">
-  <h2>Ascent Corridor, Radar &amp; Cloud Volume <span class="muted" id="v3Stamp"></span></h2>
-  <div class="map-controls">
-    <label>View <select id="v3View"><option value="clouds">Pad, radar &amp; clouds</option><option value="ascent">Full ascent</option><option value="chase">Follow vehicle</option><option value="top">Top down</option></select></label>
-    <label>Clouds valid <select id="v3Time"><option value="now">Now</option><option value="t0">At T-0</option></select></label>
-    <label>Vertical scale <input type="range" id="v3Exag" min="1" max="10" step="1" value="1"> <span id="v3ExagOut">1×</span></label>
-    <label>Cloud density <input type="range" id="v3Dens" min="0.2" max="3" step="0.1" value="1"></label>
-    <label>Flight time <input type="range" id="v3T" min="0" max="530" step="1" value="0"> <span id="v3TOut" class="mono">T+0 s</span></label>
-    <label><input type="checkbox" id="v3Radar" checked> radar</label>
-    <label>Min dBZ <input type="range" id="v3MinDbz" min="0" max="45" step="1" value="12"> <span id="v3MinOut" class="mono">12</span></label>
-    <label>Radar opacity <input type="range" id="v3RadOp" min="0.2" max="3" step="0.1" value="1"></label>
-    <label><input type="checkbox" id="v3Clouds" checked> clouds</label>
-    <label><input type="checkbox" id="v3Air" checked> aircraft</label>
-    <label><input type="checkbox" id="v3Sea" checked> vessels</label>
-    <label><input type="checkbox" id="v3Haz" checked> NOTAM / NOTMAR areas</label>
-    <label><input type="checkbox" id="v3Tele" checked> telemetry</label>
-    <label><input type="checkbox" id="v3WindLbl"> winds</label>
-    <label><input type="checkbox" id="v3Follow" checked> follow clock</label>
-    <label><input type="checkbox" id="v3Spin"> orbit camera</label>
-  </div>
-  <div id="v3Home"><div id="view3d"><div class="v3-readout" id="v3Readout"></div></div></div>
-  <div class="legend-row" id="v3Legend"></div>
+  <div id="v3Home"><div id="view3d">
+    <div class="v3-readout" id="v3Readout"></div>
+    <details class="v3-pop v3-set" id="v3Menu">
+      <summary title="Display settings" aria-label="Display settings">⚙</summary>
+      <div class="v3-panel">
+        <b>Show</b>
+        <div class="v3-checks">
+          <label><input type="checkbox" id="v3Radar" checked> Radar</label>
+          <label><input type="checkbox" id="v3Clouds" checked> Clouds</label>
+          <label><input type="checkbox" id="v3Air" checked> Aircraft</label>
+          <label><input type="checkbox" id="v3Sea" checked> Vessels</label>
+          <label><input type="checkbox" id="v3Haz" checked> NOTAM / NOTMAR</label>
+          <label><input type="checkbox" id="v3WindLbl"> Winds</label>
+          <label><input type="checkbox" id="v3Tele" checked> Telemetry</label>
+          <label><input type="checkbox" id="v3Spin"> Orbit camera</label>
+        </div>
+        <b>View</b>
+        <label>Camera <select id="v3View"><option value="clouds">Pad, radar &amp; clouds</option><option value="ascent">Full ascent</option><option value="chase">Follow vehicle</option><option value="top">Top down</option></select></label>
+        <label>Clouds valid <select id="v3Time"><option value="now">Now</option><option value="t0">At T-0</option></select></label>
+        <label>Vertical scale <input type="range" id="v3Exag" min="1" max="10" step="1" value="1"> <span id="v3ExagOut" class="mono">1×</span></label>
+        <b>Weather</b>
+        <label>Min dBZ <input type="range" id="v3MinDbz" min="0" max="45" step="1" value="12"> <span id="v3MinOut" class="mono">12</span></label>
+        <label>Radar opacity <input type="range" id="v3RadOp" min="0.2" max="3" step="0.1" value="1"></label>
+        <label>Cloud density <input type="range" id="v3Dens" min="0.2" max="3" step="0.1" value="1"></label>
+        <b>Flight</b>
+        <label>Time <input type="range" id="v3T" min="0" max="530" step="1" value="0"> <span id="v3TOut" class="mono">T+0 s</span></label>
+        <label><input type="checkbox" id="v3Follow" checked> Follow the clock after liftoff</label>
+        <span class="muted" id="v3Stamp"></span>
+      </div>
+    </details>
+    <details class="v3-pop v3-keypop" id="v3KeyMenu">
+      <summary title="What the colours and symbols mean">Key</summary>
+      <div class="legend-row" id="v3Legend"></div>
+    </details>
+  </div></div>
 </section>
 
 <section class="panel card" data-tab="lcc" data-label="Commit Criteria">
