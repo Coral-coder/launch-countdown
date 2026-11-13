@@ -9,7 +9,7 @@ const IEM = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
 const FIELD = { s: 25.5, n: 31.5, w: -84.5, e: -76 }; // area covered by the wind field
 const TRACK = '#fab219';
 
-let map, layers = {}, radarLayers = [], launchGroup, padGroup, alertLayer, windLayer, loop = null;
+let pending = null, map, layers = {}, radarLayers = [], launchGroup, padGroup, alertLayer, windLayer, loop = null;
 
 const wms = (path, layer, opts = {}) => L.tileLayer.wms(`${GEO}/${path}/ows`, { layers: layer, format: 'image/png', transparent: true, opacity: 0.75, attribution: 'NOAA/NWS', ...opts });
 const ridge = (product) => L.tileLayer(`${IEM}/ridge::MLB-${product}-0/{z}/{x}/{y}.png?_={t}`, { t: Date.now(), opacity: 0.75, attribution: 'Iowa Environmental Mesonet' });
@@ -67,6 +67,9 @@ export function initMap() {
     h('span', {}, h('i', { style: 'background:#7fb2f5' }), 'Wind field streaks (longer and brighter = faster)'),
     h('span', {}, 'Use the layer button (top right of the map) for velocity, Level III products, satellite and rainfall.'));
 }
+
+/** Call when the map's tab becomes visible: Leaflet cannot measure a hidden container. */
+export function mapShown() { map.invalidateSize(); windLayer.reset(); if (pending) { map.setView(pending, Math.max(map.getZoom(), 8)); pending = null; } }
 
 const stamp = () => { $('mapStamp').textContent = `radar refreshed ${hhmmZ(Date.now())}`; };
 
@@ -138,7 +141,7 @@ export function showLaunch(launch, all) {
     if (r.latitude == null || r.longitude == null) continue;
     L.marker([r.latitude, r.longitude]).bindPopup(`<b>${esc(r.landing_zone?.name || 'Landing')}</b><br>${esc(r.status || '')}`).addTo(launchGroup);
   }
-  map.setView([lat, lon], Math.max(map.getZoom(), 8));
+  if (map.getSize().x) map.setView([lat, lon], Math.max(map.getZoom(), 8)); else pending = [lat, lon];
   refreshWind();
 }
 

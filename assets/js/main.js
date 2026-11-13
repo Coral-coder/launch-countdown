@@ -4,9 +4,10 @@
 import { $, h, esc, num, pad2, parts, dur, utc, eastern, local, ago, parseT, getJSON, feeds, onFeeds, inclination } from './util.js';
 import { Countdown, now, syncClock, clockOffset, label } from './clock.js';
 import * as weather from './wx.js';
-import { initMap, showLaunch } from './map.js';
+import { initMap, showLaunch, mapShown } from './map.js';
+import { initTabs, showTab, currentTab } from './tabs.js';
 
-let data = null, launches = [], current = null, cd = null;
+let data = null, launches = [], current = null, cd = null, scene3d = null;
 
 const prep = (l) => ({ ...l, netMs: parseT(l.net), openMs: parseT(l.window_open), closeMs: parseT(l.window_close) });
 
@@ -41,12 +42,13 @@ function select(id, push = true) {
   if (l.pad.lat != null) {
     weather.setTarget({ lat: l.pad.lat, lon: l.pad.lon, t0: cd.t0, tbd: noT0(), heading: l.heading, goPct: l.weather_go_pct });
     if (!same) showLaunch(l, launches);
+    scene3d?.setLaunch(l);
   }
 }
 
 // ---------------------------------------------------------------- clock
 
-const el = { sign: $('ckSign'), d: $('ckD'), hh: $('ckH'), mm: $('ckM'), ss: $('ckS'), ms: $('ckMs'), clock: $('clock'), banner: $('stateBanner'), pill: $('statusPill') };
+const el = { mini: $('miniClock'), sign: $('ckSign'), d: $('ckD'), hh: $('ckH'), mm: $('ckM'), ss: $('ckS'), ms: $('ckMs'), clock: $('clock'), banner: $('stateBanner'), pill: $('statusPill') };
 const set = (node, text) => { if (node.textContent !== text) node.textContent = text; };
 
 function state() {
@@ -73,6 +75,9 @@ function tick() {
     set(el.ms, '.' + String(p.ms).padStart(3, '0'));
   }
   const [cls, pill, banner] = state();
+  set(el.mini, noT0() ? 'T- TBD' : label(cd.t));
+  el.mini.className = 'mini' + (cls === 'tbd' ? ' tbd' : cd.mode === 'hold' ? ' held' : cd.mode === 'scrub' ? ' scrubbed' : cd.t >= 0 ? ' plus' : '');
+  el.mini.hidden = currentTab() === 'countdown';
   set(el.banner, banner); set(el.pill, pill);
   el.banner.className = `banner ${cls}`; el.pill.className = `pill ${cls}`;
   el.clock.className = 'clock' + (cls === 'tbd' ? ' tbd' : cd.mode === 'hold' ? ' held' : cd.mode === 'scrub' ? ' scrubbed' : cd.t >= 0 ? ' plus' : '');
@@ -255,7 +260,7 @@ function renderLaunch() {
     .filter(([u], i, a) => u && a.findIndex((x) => x[0] === u) === i);
   const yt = vids.map(([u]) => youtubeId(u)).find(Boolean);
   const vidKey = JSON.stringify(vids);
-  if ($('webcast').dataset.key !== vidKey) $('webcast').replaceChildren(yt ? h('iframe', { src: `https://www.youtube-nocookie.com/embed/${yt}?autoplay=0`, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '', title: 'Launch webcast' })
+  if ($('webcast').dataset.key !== vidKey) $('webcast').replaceChildren(yt ? h('iframe', { src: `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1&mute=1&playsinline=1`, allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '', title: 'Launch webcast' })
     : h('div', { class: 'empty' }, vids.length ? 'The published stream cannot be embedded here. Use the links below.' : 'No webcast link published yet.'));
   $('webcast').dataset.key = vidKey;
   $('webcastLinks').replaceChildren(...vids.map(([u, t]) => link(u, t)));
@@ -332,7 +337,7 @@ function renderSchedule() {
   const tbl = $('schedule');
   tbl.replaceChildren(h('tr', {}, ['T-0 (UTC)', 'In', 'Mission', 'Vehicle', 'Provider', 'Pad', 'Status', 'Weather'].map((t) => h('th', {}, t))));
   for (const l of launches) {
-    tbl.append(h('tr', { class: 'click' + (l.id === current.id ? ' sel' : ''), onclick: () => { select(l.id); window.scrollTo({ top: 0 }); } },
+    tbl.append(h('tr', { class: 'click' + (l.id === current.id ? ' sel' : ''), onclick: () => { select(l.id); showTab('countdown'); } },
       h('td', {}, l.time_tbd ? `NET ${new Date(l.netMs).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })}` : utc(l.netMs)),
       h('td', {}, l.time_tbd ? '—' : (l.netMs > now() ? dur(l.netMs - now()) : ago(l.netMs, now()))),
       h('td', {}, h('b', {}, l.name)), h('td', {}, l.rocket || '—'), h('td', {}, l.provider || '—'), h('td', {}, l.pad.name || '—'),
@@ -371,10 +376,42 @@ onFeeds(() => {
     h('span', { class: `feed ${f.state}`, title: f.error ? `${f.error} — ${f.url}` : f.url }, name, f.at ? ` · ${ago(f.at)}` : '', f.state === 'err' ? ' · failed' : ''))), 200);
 });
 
+// ---------------------------------------------------------------- tabs and 3D view
+
+async function tabShown(name) {
+  if (name === 'map') mapShown();
+  if (name === '3d') {
+    if (!scene3d) {
+      try {
+        scene3d = await import('./scene3d.js');
+        scene3d.init(() => (cd && !noT0() ? cd.t : null));
+        if (current) scene3d.setLaunch(current);
+      } catch (e) { $('v3Readout').textContent = `3D view unavailable: ${e.message}`; scene3d = null; return; }
+    }
+    if (currentTab() === '3d') scene3d.show();
+  } else scene3d?.hide();
+}
+
+// ---------------------------------------------------------------- self-update
+
+// The deploy workflow writes the commit it was built from; when that changes, reload to pick up
+// the new site. Clock state, the entered T-0, the tab and the slideshow all live in localStorage.
+let builtFrom = null;
+async function checkVersion() {
+  try {
+    const r = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const { sha } = await r.json();
+    if (builtFrom && sha && sha !== builtFrom && !document.querySelector('dialog[open]')) location.reload();
+    builtFrom = builtFrom || sha;
+  } catch { /* offline or running locally */ }
+}
+
 // ---------------------------------------------------------------- boot
 
 initMap();
 weather.start();
+initTabs(tabShown);
 requestAnimationFrame(tick);
 setInterval(() => {
   const d = new Date(now());
@@ -383,4 +420,7 @@ setInterval(() => {
 }, 1000);
 setInterval(loadData, 60_000);
 setInterval(renderSchedule, 30_000);
+setInterval(checkVersion, 60_000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadData(); checkVersion(); } });
 loadData().then(syncClock);
+checkVersion();

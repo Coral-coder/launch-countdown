@@ -20,36 +20,43 @@
     <button id="btnSetT0" class="btn ghost" title="Enter a new T-0 (T)">SET T-0</button>
     <button id="btnReset" class="btn ghost" title="Return the clock to the published T-0">RESET</button>
   </div>
+  <div class="mini" id="miniClock" title="Countdown">T-00:00:00:00</div>
   <div class="utc"><span id="utcClock">--:--:--</span> UTC</div>
 </header>
 
-<main>
-<section class="hero" id="hero">
-  <div class="hero-bg" id="heroBg"></div>
-  <div class="hero-inner">
-    <div class="hero-title">
-      <h1 id="missionName">—</h1>
-      <div id="missionSub" class="sub">—</div>
+<nav class="tabbar" aria-label="Sections">
+  <div class="tabs" id="tabs" role="tablist"></div>
+  <div class="show">
+    <button id="btnShow" class="btn ghost small" title="Cycle through the tabs automatically (P)">▶ Slideshow</button>
+    <label title="Seconds on each tab"><input type="number" id="showSecs" min="3" max="600" step="1" value="20"> s</label>
+    <details id="showPick"><summary title="Choose which tabs the slideshow visits">Tabs</summary><div id="showTabs" class="show-tabs"></div></details>
+  </div>
+  <div class="show-bar"><i id="showBar"></i></div>
+</nav>
+
+<main id="panels">
+<section class="panel" data-tab="countdown" data-label="Countdown">
+  <div class="hero" id="hero">
+    <div class="hero-bg" id="heroBg"></div>
+    <div class="hero-inner">
+      <div class="hero-title">
+        <h1 id="missionName">—</h1>
+        <div id="missionSub" class="sub">—</div>
+      </div>
+      <div class="clock" id="clock" aria-live="off">
+        <span class="sign" id="ckSign">T-</span><span id="ckMain"><span class="seg" data-l="DAYS" id="ckD">00</span>:<span class="seg" data-l="HRS" id="ckH">00</span>:<span class="seg" data-l="MIN" id="ckM">00</span>:<span class="seg" data-l="SEC" id="ckS">00</span></span><span class="ms seg" data-l="MS" id="ckMs">.000</span>
+      </div>
+      <div id="stateBanner" class="banner">—</div>
+      <div class="hero-facts" id="heroFacts"></div>
+      <div class="next-event" id="nextEvent"></div>
     </div>
-    <div class="clock" id="clock" aria-live="off">
-      <span class="sign" id="ckSign">T-</span><span id="ckMain"><span class="seg" data-l="DAYS" id="ckD">00</span>:<span class="seg" data-l="HRS" id="ckH">00</span>:<span class="seg" data-l="MIN" id="ckM">00</span>:<span class="seg" data-l="SEC" id="ckS">00</span></span><span class="ms seg" data-l="MS" id="ckMs">.000</span>
-    </div>
-    <div id="stateBanner" class="banner">—</div>
-    <div class="hero-facts" id="heroFacts"></div>
-    <div class="next-event" id="nextEvent"></div>
   </div>
 </section>
 
-<nav class="tabs" id="tabs">
-  <a href="#sec-live">Live</a><a href="#sec-map">Radar &amp; Map</a><a href="#sec-lcc">Commit Criteria</a>
-  <a href="#sec-wx">Weather</a><a href="#sec-upper">Upper Air</a><a href="#sec-sea">Sea &amp; Space</a>
-  <a href="#sec-mission">Mission</a><a href="#sec-schedule">Schedule</a><a href="#sec-raw">Raw Data</a>
-</nav>
-
-<section id="sec-live" class="grid two">
+<section class="panel grid two" data-tab="live" data-label="Live Video">
   <article class="card">
     <h2>Pad &amp; Weather Stream</h2>
-    <div class="video"><iframe src="https://video.ibm.com/embed/23615375?autoplay=true&mute=1" allow="autoplay; fullscreen" allowfullscreen title="Pad and weather stream"></iframe></div>
+    <div class="video"><iframe src="https://video.ibm.com/embed/23615375?autoplay=true&volume=0&controls=true" allow="autoplay; fullscreen" allowfullscreen title="Pad and weather stream"></iframe></div>
   </article>
   <article class="card">
     <h2>Launch Webcast <span id="webcastSrc" class="muted"></span></h2>
@@ -58,15 +65,11 @@
   </article>
 </section>
 
-<section id="sec-map" class="card">
+<section class="panel card fill" data-tab="map" data-label="Radar &amp; Map">
   <h2>Radar, Trajectory &amp; Wind Field <span class="muted" id="mapStamp"></span></h2>
   <div class="map-controls">
-    <label>Wind field level
-      <select id="windLevel"></select>
-    </label>
-    <label>Wind valid
-      <select id="windTime"><option value="now">Now</option><option value="t0">At T-0</option></select>
-    </label>
+    <label>Wind field level <select id="windLevel"></select></label>
+    <label>Wind valid <select id="windTime"><option value="now">Now</option><option value="t0">At T-0</option></select></label>
     <label>Radar opacity <input type="range" id="radarOpacity" min="0.2" max="1" step="0.05" value="0.75"></label>
     <button class="btn ghost small" id="btnLoop">▶ Loop radar (2 h)</button>
     <span id="loopStamp" class="muted"></span>
@@ -76,44 +79,55 @@
   <div class="legend-row" id="mapLegend"></div>
 </section>
 
-<section id="sec-lcc" class="card">
+<section class="panel card fill" data-tab="3d" data-label="3D Ascent &amp; Clouds">
+  <h2>Ascent Corridor &amp; Cloud Volume <span class="muted" id="v3Stamp"></span></h2>
+  <div class="map-controls">
+    <label>View <select id="v3View"><option value="clouds">Pad &amp; clouds</option><option value="ascent">Full ascent</option><option value="top">Top down</option></select></label>
+    <label>Clouds valid <select id="v3Time"><option value="now">Now</option><option value="t0">At T-0</option></select></label>
+    <label>Vertical scale <input type="range" id="v3Exag" min="1" max="10" step="1" value="4"> <span id="v3ExagOut">4×</span></label>
+    <label>Cloud density <input type="range" id="v3Dens" min="0.2" max="3" step="0.1" value="1"></label>
+    <label>Flight time <input type="range" id="v3T" min="0" max="530" step="1" value="0"> <span id="v3TOut" class="mono">T+0 s</span></label>
+    <label><input type="checkbox" id="v3Follow" checked> follow clock</label>
+    <label><input type="checkbox" id="v3Spin"> orbit camera</label>
+  </div>
+  <div id="view3d"><div class="v3-readout" id="v3Readout"></div></div>
+  <div class="legend-row" id="v3Legend"></div>
+</section>
+
+<section class="panel card" data-tab="lcc" data-label="Commit Criteria">
   <h2>Launch Commit Criteria Watch <span class="muted">unofficial screening from public data — the 45th Weather Squadron makes the real call</span></h2>
   <div id="lcc" class="lcc"></div>
 </section>
 
-<section id="sec-wx">
+<section class="panel" data-tab="forecast" data-label="Pad Weather">
   <div class="grid two">
-    <article class="card">
-      <h2>Pad Forecast at T-0 <span class="muted" id="t0Stamp"></span></h2>
-      <div id="t0Wx" class="stats"></div>
-    </article>
-    <article class="card">
-      <h2>Current Conditions at the Pad <span class="muted" id="nowStamp"></span></h2>
-      <div id="nowWx" class="stats"></div>
-    </article>
+    <article class="card"><h2>Pad Forecast at T-0 <span class="muted" id="t0Stamp"></span></h2><div id="t0Wx" class="stats"></div></article>
+    <article class="card"><h2>Current Conditions at the Pad <span class="muted" id="nowStamp"></span></h2><div id="nowWx" class="stats"></div></article>
   </div>
   <article class="card">
     <h2>Range Observations <span class="muted">NWS / METAR</span></h2>
     <div class="scroll"><table id="obsTable" class="tbl"></table></div>
   </article>
-  <article class="card">
-    <h2>Hourly Forecast at the Pad</h2>
-    <div class="range-row" id="chartRange">
-      <button data-h="24">24 h</button><button data-h="72" class="on">3 d</button><button data-h="168">7 d</button><button data-h="t0">Around T-0</button>
-    </div>
-    <div id="charts" class="charts"></div>
-  </article>
-  <div class="grid two">
-    <article class="card"><h2>NWS Forecast</h2><div id="nwsForecast" class="periods"></div></article>
-    <article class="card">
-      <h2>Alerts &amp; Forecast Discussion</h2>
-      <div id="alerts"></div>
-      <details><summary>NWS Melbourne Area Forecast Discussion <span id="afdStamp" class="muted"></span></summary><pre id="afd" class="pre"></pre></details>
-    </article>
-  </div>
 </section>
 
-<section id="sec-upper" class="card">
+<section class="panel card" data-tab="hourly" data-label="Hourly Charts">
+  <h2>Hourly Forecast at the Pad</h2>
+  <div class="range-row" id="chartRange">
+    <button data-h="24">24 h</button><button data-h="72" class="on">3 d</button><button data-h="168">7 d</button><button data-h="t0">Around T-0</button>
+  </div>
+  <div id="charts" class="charts"></div>
+</section>
+
+<section class="panel grid two" data-tab="nws" data-label="NWS &amp; Alerts">
+  <article class="card"><h2>NWS Forecast</h2><div id="nwsForecast" class="periods"></div></article>
+  <article class="card">
+    <h2>Alerts &amp; Forecast Discussion</h2>
+    <div id="alerts"></div>
+    <details open><summary>NWS Melbourne Area Forecast Discussion <span id="afdStamp" class="muted"></span></summary><pre id="afd" class="pre"></pre></details>
+  </article>
+</section>
+
+<section class="panel card" data-tab="upper" data-label="Upper Air">
   <h2>Upper-Level Sounding</h2>
   <div class="map-controls">
     <label>Source <select id="sndSource"></select></label>
@@ -129,45 +143,43 @@
   </div>
 </section>
 
-<section id="sec-sea" class="grid three">
+<section class="panel grid three" data-tab="sea" data-label="Sea &amp; Space">
   <article class="card"><h2>Sea State <span class="muted" id="seaWhere"></span></h2><div id="sea" class="stats compact"></div></article>
   <article class="card"><h2>Port Canaveral Tide Station</h2><div id="tide" class="stats compact"></div></article>
   <article class="card"><h2>Space Weather <span class="muted">NOAA SWPC</span></h2><div id="space" class="stats compact"></div></article>
 </section>
 
-<section id="sec-mission">
-  <div class="grid two">
-    <article class="card"><h2>Mission</h2><div id="mission"></div></article>
-    <article class="card"><h2>Countdown Timeline</h2><div id="timeline" class="timeline"></div></article>
-  </div>
-  <div class="grid three">
-    <article class="card"><h2>Vehicle</h2><div id="vehicle"></div></article>
-    <article class="card"><h2>Pad &amp; Recovery</h2><div id="padInfo"></div></article>
-    <article class="card"><h2>Statistics</h2><div id="statsInfo"></div></article>
-  </div>
-  <div class="grid two">
-    <article class="card"><h2>Updates</h2><div id="updates" class="updates"></div></article>
-    <article class="card"><h2>Controller Log <span class="muted">your hold / scrub actions, stored in this browser</span></h2><div id="log" class="log"></div></article>
-  </div>
+<section class="panel grid two" data-tab="mission" data-label="Mission">
+  <article class="card"><h2>Mission</h2><div id="mission"></div></article>
+  <article class="card"><h2>Countdown Timeline</h2><div id="timeline" class="timeline"></div></article>
 </section>
 
-<section id="sec-schedule" class="card">
+<section class="panel grid three" data-tab="vehicle" data-label="Vehicle &amp; Pad">
+  <article class="card"><h2>Vehicle</h2><div id="vehicle"></div></article>
+  <article class="card"><h2>Pad &amp; Recovery</h2><div id="padInfo"></div></article>
+  <article class="card"><h2>Statistics</h2><div id="statsInfo"></div></article>
+</section>
+
+<section class="panel grid two" data-tab="updates" data-label="Updates &amp; Log">
+  <article class="card"><h2>Updates</h2><div id="updates" class="updates"></div></article>
+  <article class="card"><h2>Controller Log <span class="muted">your hold / scrub / T-0 actions, stored in this browser</span></h2><div id="log" class="log"></div></article>
+</section>
+
+<section class="panel card" data-tab="schedule" data-label="Schedule">
   <h2>Florida Launch Schedule <span class="muted" id="dataStamp"></span></h2>
   <div class="scroll"><table id="schedule" class="tbl"></table></div>
 </section>
 
-<section id="sec-raw" class="card">
+<section class="panel card" data-tab="raw" data-label="Raw Data">
   <h2>Raw Data <span class="muted">everything this page has loaded</span></h2>
   <div id="feeds" class="feeds"></div>
   <div id="raw"></div>
+  <p class="note">Launch data: <a href="https://nextspaceflight.com/launches/" target="_blank" rel="noopener">Next Spaceflight</a>, enriched with
+  <a href="https://thespacedevs.com/llapi" target="_blank" rel="noopener">Launch Library 2</a>. Weather: NWS, NOAA NEXRAD (KMLB), Iowa Environmental Mesonet,
+  Open-Meteo, NOAA CO-OPS, NOAA SWPC, NASA GIBS, RainViewer. Not an official source — never use for safety decisions.</p>
 </section>
 </main>
 
-<footer>
-  Launch data: <a href="https://nextspaceflight.com/launches/" target="_blank" rel="noopener">Next Spaceflight</a>, enriched with
-  <a href="https://thespacedevs.com/llapi" target="_blank" rel="noopener">Launch Library 2</a>. Weather: NWS, NOAA NEXRAD (KMLB), Iowa Environmental Mesonet,
-  Open-Meteo, NOAA CO-OPS, NOAA SWPC, NASA GIBS, RainViewer. Not an official source — never use for safety decisions.
-</footer>
 
 <dialog id="t0Dialog" class="dlg">
   <form method="dialog" id="t0Form">
@@ -193,6 +205,7 @@
   </form>
 </dialog>
 <div id="tip" class="tip" hidden></div>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module" src="assets/js/main.js"></script>
 </body>

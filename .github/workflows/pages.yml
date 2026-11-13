@@ -32,6 +32,8 @@ jobs:
           python3 scripts/fetch_launches.py \
             --previous "${{ steps.pages.outputs.base_url }}/data/launches.json" \
             --out data/launches.json || echo "::warning::launch data refresh failed; deploying the committed copy"
+      - name: Stamp the build
+        run: echo "{\"sha\":\"$GITHUB_SHA\"}" > version.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
