@@ -1,26 +1,17 @@
-// Windows screensaver that shows the launch countdown site full-screen in WebView2.
+// Launch Countdown: a native Windows screensaver. It fetches its own data and draws everything
+// itself (GDI+ for the panels, OpenGL for the 3D corridor); it is not a web page in a window.
 //
 // Windows starts a .scr with:  /s  run   /c  settings   /p <hwnd>  preview in the control panel.
 // This one adds  /agent : a tray helper started at sign-in that wakes the PC and the display
 // ten minutes before a launch and brings the countdown up.
-//
-// The page cannot read the live aircraft feed (the feed does not allow browsers), so the saver
-// fetches it on the page's request and hands the result over.
-//
-// Outside the launch window the saver never asks Windows to keep the display on: the page is
-// loaded without video and an optional timer switches the monitor off after a set time.
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.IO;
-using System.Net;
+using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using System.Windows.Forms;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 
 namespace LaunchCountdownSaver
@@ -31,63 +22,145 @@ namespace LaunchCountdownSaver
         private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string RunName = "LaunchCountdownAgent";
         public const string DefaultUrl = "https://coral-coder.github.io/launch-countdown/";
+        public const string DefaultStream = "https://video.ibm.com/embed/23615375?autoplay=true&volume=0";
 
-        public static string Url = DefaultUrl;
-        public static int SecondsPerTab = 20;
-        public static int DisplayOffMinutes = 30; // 0 = leave it to the Windows power settings
-        public static bool WakeForLaunch = true;
+        public static string Url = DefaultUrl, SiteIds = "12,27", Theme = "Mission Control", Slides = "", View = "Orbit", CloudTime = "t0", AisKey = "", Stream = DefaultStream;
+        public static int SecondsPerTab = 20, DisplayOffMinutes = 30, VerticalScale = 1;
+        public static bool WakeForLaunch = true, TerminalLayout = true, Video = true, Clouds = true, RadarVolume = true, Aircraft = true, Vessels = true,
+            Hazards = true, Wind = false, MapKey = true, Telemetry = true;
+
+        private static readonly string[] Bools = { "WakeForLaunch", "TerminalLayout", "Video", "Clouds", "RadarVolume", "Aircraft", "Vessels", "Hazards", "Wind", "MapKey", "Telemetry" };
+        private static readonly string[] Strings = { "Url", "SiteIds", "Theme", "Slides", "View", "CloudTime", "AisKey", "Stream" };
+        private static readonly string[] Ints = { "SecondsPerTab", "DisplayOffMinutes", "VerticalScale" };
 
         public static void Load()
         {
-            using (var k = Registry.CurrentUser.OpenSubKey(Key))
+            try
             {
-                if (k == null) return;
-                Url = k.GetValue("Url", DefaultUrl) as string ?? DefaultUrl;
-                SecondsPerTab = Clamp(k.GetValue("SecondsPerTab", 20), 3, 600, 20);
-                DisplayOffMinutes = Clamp(k.GetValue("DisplayOffMinutes", 30), 0, 1440, 30);
-                WakeForLaunch = Clamp(k.GetValue("WakeForLaunch", 1), 0, 1, 1) == 1;
+                using (var k = Registry.CurrentUser.OpenSubKey(Key))
+                {
+                    if (k == null) return;
+                    var t = typeof(Settings);
+                    foreach (var n in Strings) { var v = k.GetValue(n) as string; if (v != null) t.GetField(n).SetValue(null, v); }
+                    foreach (var n in Ints) { var v = k.GetValue(n); if (v != null) t.GetField(n).SetValue(null, Convert.ToInt32(v)); }
+                    foreach (var n in Bools) { var v = k.GetValue(n); if (v != null) t.GetField(n).SetValue(null, Convert.ToInt32(v) != 0); }
+                }
             }
+            catch { }
+            SecondsPerTab = Math.Max(3, Math.Min(600, SecondsPerTab)); DisplayOffMinutes = Math.Max(0, Math.Min(1440, DisplayOffMinutes)); VerticalScale = Math.Max(1, Math.Min(10, VerticalScale));
         }
 
         public static void Save()
         {
-            using (var k = Registry.CurrentUser.CreateSubKey(Key))
+            try
             {
-                k.SetValue("Url", Url);
-                k.SetValue("SecondsPerTab", SecondsPerTab, RegistryValueKind.DWord);
-                k.SetValue("DisplayOffMinutes", DisplayOffMinutes, RegistryValueKind.DWord);
-                k.SetValue("WakeForLaunch", WakeForLaunch ? 1 : 0, RegistryValueKind.DWord);
+                using (var k = Registry.CurrentUser.CreateSubKey(Key))
+                {
+                    var t = typeof(Settings);
+                    foreach (var n in Strings) k.SetValue(n, (string)t.GetField(n).GetValue(null) ?? "");
+                    foreach (var n in Ints) k.SetValue(n, (int)t.GetField(n).GetValue(null), RegistryValueKind.DWord);
+                    foreach (var n in Bools) k.SetValue(n, (bool)t.GetField(n).GetValue(null) ? 1 : 0, RegistryValueKind.DWord);
+                }
+                // The wake-up needs something running when the screensaver is not: start the helper at sign-in.
+                using (var run = Registry.CurrentUser.CreateSubKey(RunKey))
+                {
+                    if (WakeForLaunch) run.SetValue(RunName, "\"" + Application.ExecutablePath + "\" /agent");
+                    else run.DeleteValue(RunName, false);
+                }
             }
-            // The wake-up needs something running when the screensaver is not: start the helper at sign-in.
-            using (var run = Registry.CurrentUser.CreateSubKey(RunKey))
-            {
-                if (WakeForLaunch) run.SetValue(RunName, "\"" + Application.ExecutablePath + "\" /agent");
-                else run.DeleteValue(RunName, false);
-            }
+            catch { }
         }
 
-        private static int Clamp(object v, int lo, int hi, int fallback)
+        public static string SiteBase()
         {
-            try { return Math.Max(lo, Math.Min(hi, Convert.ToInt32(v))); } catch { return fallback; }
+            var u = string.IsNullOrWhiteSpace(Url) ? DefaultUrl : Url.Trim();
+            return u.EndsWith("/") ? u : u + "/";
         }
 
-        private static string Base()
+        /// <summary>The slides in the slideshow, in order. An empty setting means all of them.</summary>
+        public static List<Slide> SlideList(bool withVideo)
         {
-            return string.IsNullOrWhiteSpace(Url) ? DefaultUrl : Url.Trim();
+            var all = Enum.GetValues(typeof(Slide)).Cast<Slide>().Where(s => s != Slide.Terminal).ToList();
+            var chosen = Slides.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToList();
+            var list = chosen.Count == 0 ? all : all.Where(s => chosen.Contains(s.ToString())).ToList();
+            if (!withVideo || !Video) list.Remove(Slide.Live);
+            if (list.Count == 0) list.Add(Slide.Count);
+            return list;
         }
 
-        /// <summary>The site address with the screensaver switches added.</summary>
-        public static string SaverUrl()
+        /// <summary>The count as you have adjusted it (your own T-0, a hold, a scrub), kept across runs.</summary>
+        public static string CountState
         {
-            var u = Base();
-            return u + (u.Contains("?") ? "&" : "?") + "screensaver=1&secs=" + SecondsPerTab;
+            get { try { using (var k = Registry.CurrentUser.OpenSubKey(Key)) return k == null ? "" : k.GetValue("Count") as string ?? ""; } catch { return ""; } }
+            set { try { using (var k = Registry.CurrentUser.CreateSubKey(Key)) k.SetValue("Count", value); } catch { } }
+        }
+    }
+
+    /// <summary>
+    /// Hold, scrub and your own T-0, applied on top of the published launch time. Whatever you set is
+    /// dropped as soon as the source publishes a different T-0 for that launch.
+    /// </summary>
+    internal static class Count
+    {
+        private static string id; private static long source, mine, holdStart; private static bool scrub, loaded;
+
+        private static void Load()
+        {
+            if (loaded) return; loaded = true;
+            var p = Settings.CountState.Split('|');
+            if (p.Length != 5) return;
+            id = p[0]; long.TryParse(p[1], out source); long.TryParse(p[2], out mine); long.TryParse(p[3], out holdStart); scrub = p[4] == "1";
+        }
+        private static void Keep() { Settings.CountState = string.Join("|", id ?? "", source, mine, holdStart, scrub ? "1" : "0"); }
+        private static void Clear() { id = null; mine = holdStart = 0; scrub = false; Keep(); }
+
+        private static bool For(Launch l)
+        {
+            Load();
+            if (l == null || id != l.Id || !l.SourceNet.HasValue) return false;
+            if (l.SourceNet.Value.Ticks == source) return true;
+            Clear(); // the source moved T-0: theirs wins
+            return false;
         }
 
-        /// <summary>Next launch from the Cape or KSC, asked of Launch Library 2 directly so no server job is involved.</summary>
-        public static string NextLaunchUrl()
+        /// <summary>T-0 as counted. While holding or scrubbed it slides with the clock, so the count stands still.</summary>
+        public static DateTime? Net(Launch l)
         {
-            return "https://ll.thespacedevs.com/2.3.0/launches/upcoming/?limit=1&mode=list&location__ids=12,27&hide_recent_previous=true&format=json";
+            if (!For(l)) return l.SourceNet;
+            var t = mine != 0 ? new DateTime(mine, DateTimeKind.Utc) : l.SourceNet.Value;
+            return holdStart != 0 ? t + (DateTime.UtcNow - new DateTime(holdStart, DateTimeKind.Utc)) : t;
         }
+
+        public static bool Holding(Launch l) { return For(l) && holdStart != 0 && !scrub; }
+        public static bool Scrubbed(Launch l) { return For(l) && scrub; }
+        public static bool Mine(Launch l) { return For(l) && mine != 0; }
+
+        private static bool Begin(Launch l)
+        {
+            if (l == null || !l.SourceNet.HasValue) return false;
+            if (!For(l)) { id = l.Id; source = l.SourceNet.Value.Ticks; mine = holdStart = 0; scrub = false; }
+            return true;
+        }
+
+        /// <summary>Hold stops the clock; holding again resumes it, with T-0 moved later by the length of the hold.</summary>
+        public static void ToggleHold(Launch l)
+        {
+            if (!Begin(l) || scrub) return;
+            if (holdStart == 0) holdStart = DateTime.UtcNow.Ticks;
+            else { mine = Net(l).Value.Ticks; holdStart = 0; }
+            Keep();
+        }
+
+        /// <summary>Scrub stops the clock for good; only a new T-0 or a reset starts it again.</summary>
+        public static void Scrub(Launch l)
+        {
+            if (!Begin(l) || scrub) return;
+            if (holdStart == 0) holdStart = DateTime.UtcNow.Ticks;
+            scrub = true; Keep();
+        }
+
+        public static void SetT0(Launch l, DateTime utc) { if (Begin(l)) { mine = utc.Ticks; holdStart = 0; scrub = false; Keep(); } }
+        public static void Reset(Launch l) { if (For(l)) Clear(); }
     }
 
     internal static class Native
@@ -96,25 +169,28 @@ namespace LaunchCountdownSaver
         [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll")] private static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
         [DllImport("user32.dll")] private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+        [DllImport("user32.dll")] public static extern IntPtr SetParent(IntPtr child, IntPtr parent);
+        [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr hWnd, int index, int value);
+        [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int index);
+        [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+        [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
         [DllImport("kernel32.dll")] private static extern uint SetThreadExecutionState(uint flags);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr CreateWaitableTimer(IntPtr attributes, bool manualReset, string name);
         [DllImport("kernel32.dll")] private static extern bool SetWaitableTimer(IntPtr timer, ref long dueTime, int period, IntPtr routine, IntPtr arg, bool resume);
         [DllImport("kernel32.dll")] private static extern bool CancelWaitableTimer(IntPtr timer);
 
         [StructLayout(LayoutKind.Sequential)] private struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+        [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 
         public const int WM_SYSCOMMAND = 0x0112;
-        public static readonly IntPtr SC_MONITORPOWER = (IntPtr)0xF170;
-        public static readonly IntPtr MonitorOff = (IntPtr)2;
-        public static readonly IntPtr MonitorOn = (IntPtr)(-1);
-
+        public static readonly IntPtr SC_MONITORPOWER = (IntPtr)0xF170, MonitorOff = (IntPtr)2, MonitorOn = (IntPtr)(-1);
         private const uint ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x1, ES_DISPLAY_REQUIRED = 0x2;
         private static IntPtr wakeTimer = IntPtr.Zero;
 
         /// <summary>Hold (or stop holding) the system and display awake for this process.</summary>
         public static void KeepAwake(bool on)
         {
-            SetThreadExecutionState(on ? ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED : ES_CONTINUOUS);
+            try { SetThreadExecutionState(on ? ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED : ES_CONTINUOUS); } catch { }
         }
 
         /// <summary>Turn a sleeping display back on.</summary>
@@ -145,67 +221,6 @@ namespace LaunchCountdownSaver
         }
     }
 
-    /// <summary>
-    /// Knows when the next launch is (from Launch Library 2) and whether we are inside
-    /// the window where the display should be up: ten minutes before T-0 to fifteen after.
-    /// </summary>
-    internal sealed class LaunchWatcher
-    {
-        public static readonly TimeSpan Lead = TimeSpan.FromMinutes(10), Tail = TimeSpan.FromMinutes(15);
-        private readonly Timer timer = new Timer { Interval = 20000 };
-        private DateTime lastFetch = DateTime.MinValue;
-        private bool fetching;
-
-        public DateTime? Net { get; private set; }
-        public event Action Tick;
-
-        public LaunchWatcher()
-        {
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            timer.Tick += (o, e) => Poll();
-        }
-
-        public void Start() { timer.Start(); Poll(); }
-
-        public bool InWindow
-        {
-            get { var now = DateTime.UtcNow; return Net.HasValue && now >= Net.Value - Lead && now <= Net.Value + Tail; }
-        }
-
-        private void Poll()
-        {
-            if (!fetching && (DateTime.UtcNow - lastFetch).TotalMinutes >= 15) Fetch(); // the API allows 15 requests an hour, shared with the page
-            var t = Tick; if (t != null) t();
-        }
-
-        private void Fetch()
-        {
-            fetching = true;
-            var client = new WebClient();
-            client.Headers[HttpRequestHeader.CacheControl] = "no-cache";
-            client.Headers[HttpRequestHeader.UserAgent] = "LaunchCountdownScreensaver";
-            client.DownloadStringCompleted += (o, e) =>
-            {
-                fetching = false;
-                lastFetch = DateTime.UtcNow;
-                if (e.Error == null && !e.Cancelled)
-                {
-                    var m = Regex.Match(e.Result, "\"net\"\\s*:\\s*\"([^\"]+)\"");
-                    DateTime net;
-                    if (m.Success && DateTime.TryParse(m.Groups[1].Value, null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out net))
-                    {
-                        Net = net;
-                        if (Settings.WakeForLaunch) Native.ScheduleWake(net - Lead - TimeSpan.FromSeconds(30));
-                    }
-                    else Net = null;
-                }
-                client.Dispose();
-            };
-            try { client.DownloadStringAsync(new Uri(Settings.NextLaunchUrl())); }
-            catch { fetching = false; lastFetch = DateTime.UtcNow; }
-        }
-    }
-
     internal static class Program
     {
         public const string SaverMutex = "LaunchCountdownSaverRunning", AgentMutex = "LaunchCountdownAgentRunning";
@@ -213,7 +228,10 @@ namespace LaunchCountdownSaver
         [STAThread]
         private static void Main(string[] args)
         {
-            Native.SetProcessDPIAware();
+#if TEST
+            if (args.Length > 0 && args[0] == "/shot") { Settings.Load(); Shots.Run(args); return; }
+#endif
+            try { Native.SetProcessDPIAware(); } catch { }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Settings.Load();
@@ -232,7 +250,12 @@ namespace LaunchCountdownSaver
                 using (new System.Threading.Mutex(true, SaverMutex, out first))
                     if (first) Application.Run(new SaverContext());
             }
-            else if (arg.StartsWith("/p")) return; // the tiny control-panel preview is left blank
+            else if (arg.StartsWith("/p"))
+            {
+                long h;
+                var text = args.Length > 1 ? args[1] : arg.Substring(2).TrimStart(':');
+                if (long.TryParse(text, out h) && h != 0) { Store.Start(true); Application.Run(new SaverForm(new IntPtr(h))); }
+            }
             else Application.Run(new ConfigForm());
         }
 
@@ -253,9 +276,10 @@ namespace LaunchCountdownSaver
     /// <summary>Tray helper: wakes the display for a launch when no screensaver is up to do it itself.</summary>
     internal sealed class AgentContext : ApplicationContext
     {
+        public static readonly TimeSpan Lead = TimeSpan.FromMinutes(10), Tail = TimeSpan.FromMinutes(15);
         private readonly NotifyIcon tray;
-        private readonly LaunchWatcher watcher = new LaunchWatcher();
-        private DateTime? shownFor;
+        private readonly Timer timer = new Timer { Interval = 20000 };
+        private DateTime? shownFor, armedFor;
 
         public AgentContext()
         {
@@ -264,37 +288,39 @@ namespace LaunchCountdownSaver
             menu.Items.Add("Settings…", null, (o, e) => Program.Start("/c"));
             menu.Items.Add("Exit", null, (o, e) => { tray.Visible = false; ExitThread(); });
             tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "Launch Countdown", ContextMenuStrip = menu, Visible = true };
-
-            watcher.Tick += OnTick;
-            watcher.Start();
+            Store.Start(true);
+            timer.Tick += (o, e) => OnTick();
+            timer.Start();
         }
 
         private void OnTick()
         {
             Settings.Load();
             if (!Settings.WakeForLaunch) { tray.Visible = false; ExitThread(); return; }
-            tray.Text = watcher.Net.HasValue ? "Launch Countdown · next T-0 " + watcher.Net.Value.ToLocalTime().ToString("ddd HH:mm") : "Launch Countdown";
-
-            if (!watcher.InWindow || shownFor == watcher.Net) return;
-            if (Program.IsRunning(Program.SaverMutex)) { shownFor = watcher.Net; return; } // it wakes itself
-            // Someone at the keyboard does not need the screen taken over.
-            if (Native.IdleSeconds() < 60) return;
-            shownFor = watcher.Net;
+            var l = Store.Current; var net = l == null ? null : l.Net;
+            tray.Text = net.HasValue ? "Launch Countdown · next T-0 " + net.Value.ToLocalTime().ToString("ddd HH:mm") : "Launch Countdown";
+            if (!net.HasValue) return;
+            if (armedFor != net) { armedFor = net; Native.ScheduleWake(net.Value - Lead - TimeSpan.FromSeconds(30)); }
+            var now = DateTime.UtcNow;
+            if (now < net.Value - Lead || now > net.Value + Tail || shownFor == net) return;
+            if (Program.IsRunning(Program.SaverMutex)) { shownFor = net; return; } // it wakes itself
+            if (Native.IdleSeconds() < 60) return; // someone at the keyboard does not need the screen taken over
+            shownFor = net;
             Native.WakeDisplay(IntPtr.Zero);
             Program.Start("/s");
         }
     }
 
-    /// <summary>One window per monitor; the primary one hosts the page, the rest are black.</summary>
+    /// <summary>One window per monitor, each running the display.</summary>
     internal sealed class SaverContext : ApplicationContext
     {
         private readonly List<SaverForm> forms = new List<SaverForm>();
-        private readonly Timer offTimer = new Timer();
-        private readonly LaunchWatcher watcher = new LaunchWatcher();
+        private readonly Timer offTimer = new Timer(), watch = new Timer { Interval = 5000 };
         private bool holding;
 
         public SaverContext()
         {
+            Store.Start(false);
             foreach (var s in Screen.AllScreens)
             {
                 var f = new SaverForm(s.Bounds, s.Primary);
@@ -302,7 +328,7 @@ namespace LaunchCountdownSaver
                 forms.Add(f);
                 f.Show();
             }
-            Cursor.Hide();
+            try { Cursor.Hide(); } catch { }
 
             offTimer.Tick += (o, e) =>
             {
@@ -312,9 +338,8 @@ namespace LaunchCountdownSaver
                 if (forms.Count > 0) Native.SendMessage(forms[0].Handle, Native.WM_SYSCOMMAND, Native.SC_MONITORPOWER, Native.MonitorOff);
             };
             ArmOffTimer();
-
-            watcher.Tick += OnTick;
-            watcher.Start();
+            watch.Tick += (o, e) => OnTick();
+            watch.Start();
         }
 
         private void ArmOffTimer()
@@ -328,7 +353,9 @@ namespace LaunchCountdownSaver
         /// <summary>Inside the launch window the display is woken and held on; afterwards it may sleep again.</summary>
         private void OnTick()
         {
-            var want = Settings.WakeForLaunch && watcher.InWindow;
+            var l = Store.Current; var net = l == null ? null : l.Net; var now = DateTime.UtcNow;
+            bool want = Settings.WakeForLaunch && net.HasValue && now >= net.Value - AgentContext.Lead && now <= net.Value + AgentContext.Tail;
+            if (net.HasValue && Settings.WakeForLaunch) Native.ScheduleWake(net.Value - AgentContext.Lead - TimeSpan.FromSeconds(30));
             if (want && !holding)
             {
                 holding = true;
@@ -343,182 +370,6 @@ namespace LaunchCountdownSaver
                 Native.KeepAwake(false);
                 ArmOffTimer();
             }
-        }
-    }
-
-    internal sealed class SaverForm : Form
-    {
-        // Runs in every page: only Escape or the space bar ends the screensaver. The mouse is ignored.
-        private const string ExitScript = @"(function () {
-  addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' || e.key === ' ' || e.code === 'Space') { e.preventDefault(); try { window.chrome.webview.postMessage('exit'); } catch (x) {} }
-  }, true);
-})();";
-
-        private readonly WebView2 web;
-        private bool dark;
-
-        public SaverForm(Rectangle bounds, bool primary)
-        {
-            FormBorderStyle = FormBorderStyle.None;
-            StartPosition = FormStartPosition.Manual;
-            Bounds = bounds;
-            BackColor = Color.Black;
-            ShowInTaskbar = false;
-            TopMost = true;
-            KeyPreview = true;
-
-            KeyDown += (o, e) => { if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.Space) Close(); };
-
-            if (!primary) return;
-            web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.Black };
-            Controls.Add(web);
-            Load += async (o, e) =>
-            {
-                try
-                {
-                    var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LaunchCountdownSaver");
-                    var env = await CoreWebView2Environment.CreateAsync(null, data);
-                    await web.EnsureCoreWebView2Async(env);
-                    var s = web.CoreWebView2.Settings;
-                    s.AreDefaultContextMenusEnabled = false;
-                    s.AreDevToolsEnabled = false;
-                    s.IsStatusBarEnabled = false;
-                    s.AreBrowserAcceleratorKeysEnabled = false;
-                    await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(ExitScript);
-                    web.CoreWebView2.WebMessageReceived += (s2, m) =>
-                    {
-                        var json = m.WebMessageAsJson ?? "";
-                        if (json == "\"exit\"") Close();
-                        else if (json.Contains("\"aircraft\"")) Aircraft(json);
-                    };
-                    web.CoreWebView2.NewWindowRequested += (s2, n) => n.Handled = true;
-                    web.CoreWebView2.Navigate(Settings.SaverUrl());
-                }
-                catch (Exception ex)
-                {
-                    // Usually a missing WebView2 runtime; say so instead of showing a blank screen.
-                    Controls.Remove(web);
-                    Controls.Add(new Label
-                    {
-                        Dock = DockStyle.Fill, ForeColor = Color.Gray, BackColor = Color.Black, TextAlign = ContentAlignment.MiddleCenter,
-                        Font = new Font("Segoe UI", 14f),
-                        Text = "Launch Countdown screensaver could not start the Microsoft Edge WebView2 runtime.\n" + ex.Message,
-                    });
-                }
-            };
-        }
-
-        private DateTime lastAircraft = DateTime.MinValue;
-        private bool aircraftBusy;
-
-        /// <summary>
-        /// The page asked for the aircraft around a pad: {"type":"aircraft","lat":..,"lon":..,"nm":..}.
-        /// Only the numbers are taken from the request and the address is fixed, so a page cannot use
-        /// this to reach anything else. The feed allows about one request a second; this asks at most
-        /// once every five.
-        /// </summary>
-        private void Aircraft(string request)
-        {
-            double lat, lon, nm;
-            if (dark || aircraftBusy || (DateTime.UtcNow - lastAircraft).TotalSeconds < 5) return;
-            if (!Number(request, "lat", out lat) || !Number(request, "lon", out lon) || !Number(request, "nm", out nm)) return;
-            if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return;
-            nm = Math.Max(10, Math.Min(250, nm));
-            var inv = System.Globalization.CultureInfo.InvariantCulture;
-            var url = "https://api.adsb.lol/v2/lat/" + lat.ToString("0.000", inv) + "/lon/" + lon.ToString("0.000", inv) + "/dist/" + nm.ToString("0", inv);
-
-            aircraftBusy = true;
-            lastAircraft = DateTime.UtcNow;
-            var client = new WebClient { Encoding = System.Text.Encoding.UTF8 };
-            client.Headers[HttpRequestHeader.UserAgent] = "LaunchCountdownScreensaver";
-            client.Headers[HttpRequestHeader.Accept] = "application/json";
-            client.DownloadStringCompleted += (o, e) =>
-            {
-                aircraftBusy = false;
-                try
-                {
-                    if (e.Error == null && !e.Cancelled && !dark && !IsDisposed && web.CoreWebView2 != null && e.Result.TrimStart().StartsWith("{"))
-                        web.CoreWebView2.PostWebMessageAsJson("{\"type\":\"aircraft\",\"data\":" + e.Result + "}");
-                }
-                catch { } // a bad reply or a page that has gone away: the next request tries again
-                client.Dispose();
-            };
-            try { client.DownloadStringAsync(new Uri(url)); } catch { aircraftBusy = false; }
-        }
-
-        private static bool Number(string json, string name, out double value)
-        {
-            var m = Regex.Match(json, "\"" + name + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
-            value = 0;
-            return m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
-        }
-
-        /// <summary>Stop the page and leave a black window, so nothing keeps drawing once the display is off.</summary>
-        public void GoDark()
-        {
-            dark = true;
-            if (web == null) return;
-            try { if (web.CoreWebView2 != null) web.CoreWebView2.Navigate("about:blank"); } catch { }
-            web.Visible = false;
-        }
-
-        /// <summary>Bring the page back after GoDark, for the launch window.</summary>
-        public void Wake()
-        {
-            if (!dark) return;
-            dark = false;
-            if (web == null) return;
-            web.Visible = true;
-            try { if (web.CoreWebView2 != null) web.CoreWebView2.Navigate(Settings.SaverUrl()); } catch { }
-        }
-    }
-
-    internal sealed class ConfigForm : Form
-    {
-        public ConfigForm()
-        {
-            Text = "Launch Countdown screensaver";
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterScreen;
-            Font = new Font("Segoe UI", 9f);
-            AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(540, 330);
-
-            var url = new TextBox { Left = 16, Top = 36, Width = 508, Text = Settings.Url };
-            var secs = new NumericUpDown { Left = 16, Top = 96, Width = 90, Minimum = 3, Maximum = 600, Value = Settings.SecondsPerTab };
-            var off = new NumericUpDown { Left = 280, Top = 96, Width = 90, Minimum = 0, Maximum = 1440, Value = Settings.DisplayOffMinutes };
-            var wake = new CheckBox { Left = 16, Top = 180, Width = 508, Text = "Wake the display 10 minutes before launch and show the countdown", Checked = Settings.WakeForLaunch };
-            var ok = new Button { Text = "OK", Left = 348, Top = 286, Width = 84, Height = 28, DialogResult = DialogResult.OK };
-            var cancel = new Button { Text = "Cancel", Left = 440, Top = 286, Width = 84, Height = 28, DialogResult = DialogResult.Cancel };
-
-            Controls.AddRange(new Control[]
-            {
-                new Label { Left = 16, Top = 14, AutoSize = true, Text = "Site address" }, url,
-                new Label { Left = 16, Top = 74, AutoSize = true, Text = "Seconds on each tab" }, secs,
-                new Label { Left = 280, Top = 74, AutoSize = true, Text = "Turn the display off after (minutes)" }, off,
-                new Label { Left = 16, Top = 128, Width = 508, Height = 40, ForeColor = SystemColors.GrayText,
-                    Text = "0 minutes leaves the display to the Windows power settings. Outside the launch window the screensaver plays no video and makes no power requests." },
-                wake,
-                new Label { Left = 34, Top = 206, Width = 490, Height = 70, ForeColor = SystemColors.GrayText,
-                    Text = "Adds a small helper to the notification area that starts when you sign in. It wakes the PC and the display at T-10 minutes, keeps them on until T+15 minutes, then lets them sleep again. Waking from sleep needs \"Allow wake timers\" enabled in the Windows power plan, and a locked PC will show the lock screen." },
-                ok, cancel,
-            });
-            AcceptButton = ok;
-            CancelButton = cancel;
-
-            ok.Click += (o, e) =>
-            {
-                Settings.Url = string.IsNullOrWhiteSpace(url.Text) ? Settings.DefaultUrl : url.Text.Trim();
-                Settings.SecondsPerTab = (int)secs.Value;
-                Settings.DisplayOffMinutes = (int)off.Value;
-                Settings.WakeForLaunch = wake.Checked;
-                Settings.Save();
-                if (Settings.WakeForLaunch && !Program.IsRunning(Program.AgentMutex)) Program.Start("/agent");
-                Close();
-            };
-            cancel.Click += (o, e) => Close();
         }
     }
 }
