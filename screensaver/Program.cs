@@ -4,6 +4,9 @@
 // This one adds  /agent : a tray helper started at sign-in that wakes the PC and the display
 // ten minutes before a launch and brings the countdown up.
 //
+// The page cannot read the live aircraft feed (the feed does not allow browsers), so the saver
+// fetches it on the page's request and hands the result over.
+//
 // Outside the launch window the saver never asks Windows to keep the display on: the page is
 // loaded without video and an optional timer switches the monitor off after a set time.
 
@@ -143,7 +146,7 @@ namespace LaunchCountdownSaver
     }
 
     /// <summary>
-    /// Knows when the next launch is (from the site's data/next.json) and whether we are inside
+    /// Knows when the next launch is (from Launch Library 2) and whether we are inside
     /// the window where the display should be up: ten minutes before T-0 to fifteen after.
     /// </summary>
     internal sealed class LaunchWatcher
@@ -383,7 +386,12 @@ namespace LaunchCountdownSaver
                     s.IsStatusBarEnabled = false;
                     s.AreBrowserAcceleratorKeysEnabled = false;
                     await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(ExitScript);
-                    web.CoreWebView2.WebMessageReceived += (s2, m) => Close();
+                    web.CoreWebView2.WebMessageReceived += (s2, m) =>
+                    {
+                        var json = m.WebMessageAsJson ?? "";
+                        if (json == "\"exit\"") Close();
+                        else if (json.Contains("\"aircraft\"")) Aircraft(json);
+                    };
                     web.CoreWebView2.NewWindowRequested += (s2, n) => n.Handled = true;
                     web.CoreWebView2.Navigate(Settings.SaverUrl());
                 }
@@ -399,6 +407,51 @@ namespace LaunchCountdownSaver
                     });
                 }
             };
+        }
+
+        private DateTime lastAircraft = DateTime.MinValue;
+        private bool aircraftBusy;
+
+        /// <summary>
+        /// The page asked for the aircraft around a pad: {"type":"aircraft","lat":..,"lon":..,"nm":..}.
+        /// Only the numbers are taken from the request and the address is fixed, so a page cannot use
+        /// this to reach anything else. The feed allows about one request a second; this asks at most
+        /// once every five.
+        /// </summary>
+        private void Aircraft(string request)
+        {
+            double lat, lon, nm;
+            if (dark || aircraftBusy || (DateTime.UtcNow - lastAircraft).TotalSeconds < 5) return;
+            if (!Number(request, "lat", out lat) || !Number(request, "lon", out lon) || !Number(request, "nm", out nm)) return;
+            if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return;
+            nm = Math.Max(10, Math.Min(250, nm));
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var url = "https://api.adsb.lol/v2/lat/" + lat.ToString("0.000", inv) + "/lon/" + lon.ToString("0.000", inv) + "/dist/" + nm.ToString("0", inv);
+
+            aircraftBusy = true;
+            lastAircraft = DateTime.UtcNow;
+            var client = new WebClient { Encoding = System.Text.Encoding.UTF8 };
+            client.Headers[HttpRequestHeader.UserAgent] = "LaunchCountdownScreensaver";
+            client.Headers[HttpRequestHeader.Accept] = "application/json";
+            client.DownloadStringCompleted += (o, e) =>
+            {
+                aircraftBusy = false;
+                try
+                {
+                    if (e.Error == null && !e.Cancelled && !dark && !IsDisposed && web.CoreWebView2 != null && e.Result.TrimStart().StartsWith("{"))
+                        web.CoreWebView2.PostWebMessageAsJson("{\"type\":\"aircraft\",\"data\":" + e.Result + "}");
+                }
+                catch { } // a bad reply or a page that has gone away: the next request tries again
+                client.Dispose();
+            };
+            try { client.DownloadStringAsync(new Uri(url)); } catch { aircraftBusy = false; }
+        }
+
+        private static bool Number(string json, string name, out double value)
+        {
+            var m = Regex.Match(json, "\"" + name + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+            value = 0;
+            return m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
         }
 
         /// <summary>Stop the page and leave a black window, so nothing keeps drawing once the display is off.</summary>

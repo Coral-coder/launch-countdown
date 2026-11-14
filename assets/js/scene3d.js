@@ -506,9 +506,39 @@ const hhmm = (iso) => (iso ? new Date(iso).toISOString().slice(11, 16) + 'Z' : '
 async function loadTraffic() {
   if (!launch) return;
   const get = async (name, file) => { try { return await getJSON(name, `data/${file}?t=${Date.now()}`, { keep: false }); } catch { return null; } };
-  [traffic, hazards] = await Promise.all([get('Aircraft and vessel snapshot', 'traffic.json'), get('Launch hazard areas', 'hazards.json')]);
+  const [snap, haz] = await Promise.all([get('Aircraft and vessel snapshot', 'traffic.json'), get('Launch hazard areas', 'hazards.json')]);
+  hazards = haz;
+  // a live aircraft feed from the screensaver outranks the deploy's snapshot; vessels still come from the snapshot
+  traffic = liveAir && now() - liveAir.at < 2 * 6e4 ? { ...(snap || { vessels: [], notes: [] }), aircraft: liveAir.aircraft, generated_at: new Date(liveAir.at).toISOString(), live: true } : snap;
   buildTraffic();
 }
+
+// The Windows screensaver hosts this page in WebView2 and can read the aircraft feed, which a
+// browser cannot. The page asks it for the aircraft around the pad every few seconds and it posts
+// back what adsb.lol returned.
+const HOST = window.chrome?.webview, LIVE_SEC = 10, LIVE_NM = 150;
+let liveAir = null;
+function askHost() {
+  if (!HOST || !shown || launch?.pad?.lat == null) return;
+  try { HOST.postMessage({ type: 'aircraft', lat: +launch.pad.lat.toFixed(3), lon: +launch.pad.lon.toFixed(3), nm: LIVE_NM }); } catch { /* not that host */ }
+}
+function fromHost(e) {
+  const d = e.data;
+  if (!d || d.type !== 'aircraft' || !Array.isArray(d.data?.ac)) return;
+  const at = d.data.now > 1e12 ? d.data.now : now();
+  const aircraft = d.data.ac.filter((a) => a.lat != null && a.hex).map((a) => {
+    const alt = a.alt_geom ?? a.alt_baro;
+    return {
+      id: a.hex, name: String(a.flight || a.r || a.hex).trim(), type: a.t, cat: a.category, lat: a.lat, lon: a.lon,
+      alt_ft: alt == null || alt === 'ground' ? 0 : alt, ground: alt === 'ground',
+      kt: a.gs, track: a.track, fpm: a.geom_rate ?? a.baro_rate, t: Math.round(at / 1000 - (a.seen_pos || 0)),
+    };
+  });
+  liveAir = { at, aircraft };
+  traffic = { ...(traffic || { vessels: [], notes: [] }), aircraft, generated_at: new Date(at).toISOString(), live: true };
+  if (root) buildTraffic();
+}
+if (HOST) { HOST.addEventListener('message', fromHost); setInterval(askHost, LIVE_SEC * 1000); }
 
 /** Hazard areas that matter now: near this pad and not yet over. */
 function activeAreas() {
@@ -576,9 +606,9 @@ function noteTraffic(areas) {
   const snapAge = traffic ? (now() - Date.parse(traffic.generated_at)) / 6e4 : null;
   const n = (sea) => movers.filter((m) => m.sea === sea).length;
   trafficNote = !traffic ? 'traffic snapshot unavailable'
-    : `traffic  ${n(false)} aircraft · ${n(true)} vessels · ${Math.round(snapAge)} min old\n` +
+    : `traffic  ${n(false)} aircraft · ${n(true)} vessels · ${traffic.live ? 'aircraft live' : Math.round(snapAge) + ' min old'}\n` +
       `hazards  ${areas.filter((a) => a.kind === 'notam').length} NOTAM · ${areas.filter((a) => a.kind === 'notmar').length} NOTMAR · ${movers.filter((m) => m.state === 2).length} inside · ${movers.filter((m) => m.state === 1).length} inbound` +
-      (snapAge > STALE_MIN ? '\n         snapshot too old to show aircraft' : '') +
+      (!traffic.live && snapAge > STALE_MIN ? '\n         snapshot too old to show aircraft' : '') +
       ((traffic.notes || []).some((x) => /AIS/.test(x)) ? '\n         no AIS key set: vessels off' : '') +
       ((hazards?.notes || []).length && !areas.some((a) => a.kind === 'notmar') ? '\n         maritime warnings unavailable' : '');
 }
@@ -880,11 +910,12 @@ export function setLaunch(l) {
   if (!scene || l.pad.lat == null || !moved) return;
   cloudKey = ''; rebuild(); view($('v3View').value);
   if (shown) { loadClouds(); loadRadar(); }
+  liveAir = null; askHost();
 }
 
 export function show() {
   if (shown) return; shown = true;
-  loadClouds(); loadRadar(); loadTraffic(); rebuild();
+  loadClouds(); loadRadar(); loadTraffic(); askHost(); rebuild();
   raf = requestAnimationFrame(frame);
 }
 export function hide() { shown = false; cancelAnimationFrame(raf); }

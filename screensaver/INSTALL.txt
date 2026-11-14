@@ -11,6 +11,13 @@ Install
 Notes
   - Needs the Microsoft Edge WebView2 runtime, which Windows 11 and current
     Windows 10 already include.
+  - Live aircraft: on the 3D view the screensaver fetches aircraft positions
+    itself (from adsb.lol, every 10 seconds) and hands them to the page, so
+    they are live here even though a normal browser can only show a snapshot.
+  - Launch wake-up (on by default, under "Settings..."): a small helper in the
+    notification area starts when you sign in, wakes the PC and display ten
+    minutes before a Florida launch and keeps them on until T+15 minutes.
+    Waking from sleep needs "Allow wake timers" in the Windows power plan.
   - Press Escape or the space bar to leave the screensaver. The mouse is ignored.
   - The display still sleeps: the screensaver plays no video and makes no
     power requests, so the Windows "turn off the display" timer applies as
