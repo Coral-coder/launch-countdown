@@ -56,6 +56,7 @@ namespace LaunchCountdownSaver
             }
             else index = 3; // other monitors run the same show, a few slides ahead
             KeyDown += OnKey;
+            if (primary) Shown += (o, e) => { Activate(); Focus(); };
         }
 
         /// <summary>The preview: a child of the little monitor in Screen Saver Settings.</summary>
@@ -77,7 +78,8 @@ namespace LaunchCountdownSaver
         {
             BackColor = Color.Black;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-            frame.Tick += (o, e) => Tick();
+            // one bad frame (a source returning something odd) must not take the display down
+            frame.Tick += (o, e) => { try { Tick(); } catch { force = true; } };
             frame.Start();
         }
 
@@ -155,8 +157,12 @@ namespace LaunchCountdownSaver
         protected override void OnPaint(PaintEventArgs e)
         {
             if (dark || back == null) { e.Graphics.Clear(Color.Black); return; }
-            e.Graphics.DrawImageUnscaled(back, 0, 0);
-            Painter.DrawClock(e.Graphics, lay, ClientSize.Height / 1080f, DateTime.UtcNow);
+            try
+            {
+                e.Graphics.DrawImageUnscaled(back, 0, 0);
+                Painter.DrawClock(e.Graphics, lay, ClientSize.Height / 1080f, DateTime.UtcNow);
+            }
+            catch { }
         }
         protected override void OnPaintBackground(PaintEventArgs e) { }
 
