@@ -399,7 +399,7 @@ namespace LaunchCountdownSaver
             string src = prof != null && prof.Count > 1 ? (l.Net.HasValue && w.Hour(l.Net.Value) >= 0 ? "forecast sounding at T-0" : "current forecast sounding") : null;
             double at = flying ? t : 72; // before liftoff, show what the profile predicts at maximum dynamic pressure
             var s = Flight.At(at, l, prof, src);
-            float y = c.Y, lh = 30 * u;
+            float y = c.Y, lh = Math.Min(30 * u, c.Height / 23.5f);
             Text(flying ? Rel(t) + (s.MaxQ ? "   MAX-Q" : "") : "PREDICTED AT MAX-Q  (T+1:12)", c.X, y, 15, flying ? th.Accent : th.Warn, true); y += lh * 1.2f;
             Action<string, string> row = (k, v) => { Text(Up(k), c.X, y + 3 * u, 13, th.Muted); Text(v, c.Right, y, 17, th.Ink, false, true, 1); y += lh; };
             row("Altitude", s.Alt.ToString("0.0") + " km");
@@ -425,7 +425,8 @@ namespace LaunchCountdownSaver
             bool live = (now - Store.PlanesAt).TotalSeconds < 60;
             if (Scene != null && View3DAvailable)
             {
-                row("Aircraft within 220 km", live ? Scene.Aircraft.ToString() : "feed not answering");
+                row("Aircraft within 220 km", !Settings.Aircraft ? "off" : live ? Scene.Aircraft.ToString() : "feed not answering");
+                row("Vessels within 220 km", !Settings.Vessels ? "off" : Store.VesselNote.Length > 0 ? Store.VesselNote : Scene.Vessels.ToString());
                 Text(Up("Inside a hazard area"), c.X, y + 3 * u, 13, th.Muted); Text(Scene.Inside.ToString(), c.Right, y, 17, Scene.Inside > 0 ? th.Bad : th.Ink, true, true, 1); y += lh;
                 Text(Up("Inbound at T-0"), c.X, y + 3 * u, 13, th.Muted); Text(Scene.Inbound.ToString(), c.Right, y, 17, Scene.Inbound > 0 ? th.Bad : th.Ink, true, true, 1); y += lh;
                 row("Hazard areas", Scene.Notams + " NOTAM · " + Scene.Notmars + " NOTMAR");
@@ -433,7 +434,8 @@ namespace LaunchCountdownSaver
             var cl = Store.Cloud;
             if (cl != null) row("Cloud max low/mid/high", (cl.MaxLow * 100).ToString("0") + " / " + (cl.MaxMid * 100).ToString("0") + " / " + (cl.MaxHigh * 100).ToString("0") + " %");
             if (cl != null) { Text("cloud volume valid " + cl.Valid.ToString("ddd HH:mm") + " UTC", c.X, y, 12, th.Muted); y += lh * 0.8f; }
-            Text(Store.Radar != null ? "radar " + Store.Radar.At.ToString("HH:mm") + " UTC" : "no radar picture for this site", c.X, y, 12, th.Muted);
+            var rv = Store.Volume;
+            Text(rv != null ? "radar volume " + rv.Id + " " + rv.Time.ToString("HH:mm") + " UTC · " + rv.Tilts + " tilts · max " + rv.MaxDbz.ToString("0") + " dBZ · tops " + rv.EchoTop.ToString("0.0") + " km" : Store.VolumeNote, c.X, y, 12, th.Muted, false, false, -1, c.Width);
         }
 
         // ---------------------------------------------------------------- map

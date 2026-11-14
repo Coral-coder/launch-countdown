@@ -1,29 +1,53 @@
 Launch Countdown screensaver for Windows 10 / 11 (64-bit)
 
+A native screensaver: it fetches its own data and draws everything itself.
+It is not a web page in a window.
+
 Install
   1. Extract this whole folder somewhere permanent, for example
      C:\Program Files\LaunchCountdown  (all the files must stay together).
   2. Right-click LaunchCountdown.scr and choose "Install".
-     Windows opens Screen Saver Settings with it selected.
-  3. Choose the wait time there. "Settings..." sets the seconds per tab and
-     how long before the screensaver switches the display off.
+     Windows opens Screen Saver Settings with it selected; the small monitor
+     there shows a live preview.
+  3. "Settings..." opens its own settings: theme, launch sites, which slides
+     to show and for how long, the 3D layers, display-off time, launch wake-up.
+
+Keys while it runs (the mouse is ignored)
+  Esc, Space    exit
+  H             hold / resume (T-0 moves later by the length of the hold)
+  Shift+S       scrub
+  T             enter a new T-0 (kept until the source publishes a new time)
+  R             reset to the published T-0
+  Left, Right   previous / next slide        1-9  jump to a slide
+  P             pause the slideshow          + -  seconds per slide
+  L             follow the next launch in the list
+  C             theme                        E    terminal-count layout on/off
+  I             live video on/off            V    3D view
+  X             3D vertical scale            O D  cloud volume / radar volume
+  A B N         aircraft / vessels / NOTAM and NOTMAR areas
+  W             wind arrows and labels       G Y  telemetry / key
+  M             cloud and wind fields for launch time or now
+  F1, K         show this list on screen
 
 Notes
-  - Needs the Microsoft Edge WebView2 runtime, which Windows 11 and current
-    Windows 10 already include.
-  - Live aircraft: on the 3D view the screensaver fetches aircraft positions
-    itself (from adsb.lol, every 10 seconds) and hands them to the page, so
-    they are live here even though a normal browser can only show a snapshot.
-  - Launch wake-up (on by default, under "Settings..."): a small helper in the
-    notification area starts when you sign in, wakes the PC and display ten
-    minutes before a Florida launch and keeps them on until T+15 minutes.
+  - Needs nothing installed for the display itself (.NET Framework 4.8 and
+    OpenGL are part of Windows). Live video uses the Microsoft Edge WebView2
+    runtime, which Windows 11 and current Windows 10 include; without it the
+    video panels show the range map instead.
+  - From T-1 hour to T+15 minutes it switches to the terminal count: clock
+    top centre, 3D corridor left, live video right, timeline under the video.
+  - Launch wake-up (on by default): a small helper in the notification area
+    starts when you sign in, wakes the PC and display ten minutes before a
+    launch at your selected sites and keeps them on until T+15 minutes.
     Waking from sleep needs "Allow wake timers" in the Windows power plan.
-  - Press Escape or the space bar to leave the screensaver. The mouse is ignored.
-  - The display still sleeps: the screensaver plays no video and makes no
-    power requests, so the Windows "turn off the display" timer applies as
-    usual, and its own timer (default 30 minutes) switches the monitor off too.
+  - The display still sleeps otherwise: outside the launch window it makes no
+    power requests, the Windows display timer applies as usual, and its own
+    timer (default 30 minutes) switches the monitor off too.
+  - Vessels need a free aisstream.io key, entered under Settings > Sources.
   - Windows may warn that the file comes from an unknown publisher; it is
     not code-signed.
 
 Remove
   Pick a different screensaver in Screen Saver Settings, then delete the folder.
+  If the wake-up helper is running, untick it in Settings first (or exit it
+  from its notification-area icon).

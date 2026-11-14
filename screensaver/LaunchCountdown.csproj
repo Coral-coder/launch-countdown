@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- .NET Framework 4.8 ships with Windows 10 and 11, so the screensaver needs no runtime install. -->
+  <!-- .NET Framework 4.8 ships with Windows 10 and 11, so the screensaver needs no runtime install. WebView2 is used only for the live video panel. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net48</TargetFramework>

@@ -16,13 +16,13 @@ namespace LaunchCountdownSaver
         public enum Mode { Orbit, Pad, Chase }
         public Mode View = Mode.Orbit;
         /// <summary>Readout numbers, refreshed every frame for whoever draws the telemetry beside the view.</summary>
-        public int Aircraft, Inside, Inbound, Notams, Notmars;
+        public int Aircraft, Vessels, Inside, Inbound, Notams, Notmars;
 
         private const double D2R = Math.PI / 180, TrackCapKm = 25, TrafficKm = 220, StaleMin = 20, ModelSize = 0.014;
-        private static readonly Color Air = Color.FromArgb(180, 184, 188), Notam = Color.FromArgb(255, 210, 31), Notmar = Color.FromArgb(255, 90, 54);
+        private static readonly Color Air = Color.FromArgb(180, 184, 188), Ship = Color.FromArgb(111, 227, 111), Notam = Color.FromArgb(255, 210, 31), Notmar = Color.FromArgb(255, 90, 54);
 
         private readonly Stopwatch clock = Stopwatch.StartNew();
-        private int mapTex, radarTex; private MapImage mapSrc, radarSrc; private Clouds cloudSrc; private int[] cloudTex;
+        private int mapTex, radarTex; private MapImage mapSrc, radarSrc; private Clouds cloudSrc; private int[] cloudTex, volTex; private RadarVolume volSrc;
         private double last, camAz = 215, dist = 105, tx, ty, tz, ex, ey, ez;
         private double[] mvp; private int W, H, vs = 1; private Launch l;
         private readonly Dictionary<string, double[]> shown = new Dictionary<string, double[]>();
@@ -73,9 +73,10 @@ namespace LaunchCountdownSaver
             Ground(th);
             Areas(th, t);
             GL.glEnable(GL.DEPTH_TEST); GL.glDepthFunc(GL.LEQUAL); GL.glDepthMask(1);
-            if (Settings.Aircraft) Traffic(t, dt, now); else Aircraft = Inside = Inbound = 0;
+            if (Settings.Aircraft || Settings.Vessels) Traffic(t, dt, now); else Aircraft = Vessels = Inside = Inbound = 0;
             GL.glDepthMask(0); GL.glDisable(GL.DEPTH_TEST);
             if (Settings.Clouds) CloudVolume();
+            if (Settings.RadarVolume) RadarSlices();
             if (Settings.Wind) Wind(th);
             Corridor(th, t, flying);
             GL.glDepthMask(1);
@@ -202,6 +203,51 @@ namespace LaunchCountdownSaver
             order.Sort((a, b) => Math.Abs(height(b) - ey).CompareTo(Math.Abs(height(a) - ey)));
             GL.glColor4f(1, 1, 1, 1);
             foreach (int k in order) { GL.glBindTexture(GL.TEXTURE_2D, cloudTex[k]); Quad(Clouds.Half, height(k), true); }
+        }
+
+        // ---------------------------------------------------------------- radar volume
+
+        /// <summary>Reflectivity colour: faint blue for light echoes through green, yellow and red to magenta.</summary>
+        private static void DbzColor(double dbz, out byte r, out byte g, out byte b, out byte a)
+        {
+            double[][] stops = { new[] { 5.0, 70, 130, 200 }, new[] { 18.0, 40, 170, 230 }, new[] { 28.0, 40, 200, 70 }, new[] { 38.0, 240, 220, 40 }, new[] { 48.0, 250, 130, 30 }, new[] { 56.0, 235, 40, 40 }, new[] { 66.0, 230, 60, 220 } };
+            int i = 0; while (i < stops.Length - 2 && dbz > stops[i + 1][0]) i++;
+            double f = Math.Max(0, Math.Min(1, (dbz - stops[i][0]) / (stops[i + 1][0] - stops[i][0])));
+            r = (byte)(stops[i][1] + (stops[i + 1][1] - stops[i][1]) * f); g = (byte)(stops[i][2] + (stops[i + 1][2] - stops[i][2]) * f); b = (byte)(stops[i][3] + (stops[i + 1][3] - stops[i][3]) * f);
+            a = (byte)(255 * Math.Max(0, Math.Min(0.6, 0.05 + (dbz - 5) / 45 * 0.55)));
+        }
+
+        private void RadarSlices()
+        {
+            var v = Store.Volume;
+            if (v != volSrc)
+            {
+                if (volTex != null) for (int i = 0; i < volTex.Length; i++) GL.Free(ref volTex[i]);
+                volSrc = v; volTex = null;
+                if (v != null)
+                {
+                    int n = RadarVolume.N; volTex = new int[RadarVolume.NZ];
+                    for (int k = 0; k < RadarVolume.NZ; k++)
+                    {
+                        var px = new byte[n * n * 4]; bool any = false;
+                        for (int y = 0; y < n; y++) for (int x = 0; x < n; x++)
+                        {
+                            byte raw = v.Data[x + n * ((n - 1 - y) + n * k)]; // row 0 of the texture is the northern edge
+                            if (raw == 0) continue;
+                            double dbz = raw / 2.0 - 32; if (dbz < 5) continue;
+                            int o = (y * n + x) * 4; DbzColor(dbz, out px[o], out px[o + 1], out px[o + 2], out px[o + 3]); any = true;
+                        }
+                        volTex[k] = any ? GL.Texture(px, n, n) : 0;
+                    }
+                }
+            }
+            if (volTex == null || volSrc.Lat != l.Lat || volSrc.Lon != l.Lon) return;
+            var order = new List<int>();
+            for (int k = 0; k < RadarVolume.NZ; k++) if (volTex[k] != 0) order.Add(k);
+            Func<int, double> height = k => (k + 0.5) / RadarVolume.NZ * RadarVolume.Top * vs;
+            order.Sort((a, b) => Math.Abs(height(b) - ey).CompareTo(Math.Abs(height(a) - ey)));
+            GL.glColor4f(1, 1, 1, 1);
+            foreach (int k in order) { GL.glBindTexture(GL.TEXTURE_2D, volTex[k]); Quad(RadarVolume.Half, height(k), true); }
         }
 
         // ---------------------------------------------------------------- wind
@@ -434,6 +480,22 @@ namespace LaunchCountdownSaver
             models["heli"] = m.ToArray();
             m = new List<Tri>(); Box(m, 0, 0.29, -0.2, 2.1, 0.02, 0.1); Box(m, 0, 0.29, -0.2, 0.1, 0.02, 2.1);
             rotor = m.ToArray();
+            m = new List<Tri>(); // small boat: hull and cabin
+            Box(m, 0, 0.1, 0, 0.5, 0.2, 1.5); Box(m, 0, 0.1, -0.85, 0.3, 0.2, 0.25); Box(m, 0, 0.32, 0.15, 0.36, 0.24, 0.5);
+            models["boat"] = m.ToArray();
+            m = new List<Tri>(); // cargo ship: bridge at the stern, containers forward of it
+            Box(m, 0, 0.11, 0, 0.5, 0.22, 2.0); Box(m, 0, 0.42, 0.78, 0.44, 0.4, 0.3); Box(m, 0, 0.32, -0.15, 0.4, 0.2, 1.3);
+            models["cargo"] = m.ToArray();
+            m = new List<Tri>(); // tanker: long flat deck with a pipe run, bridge at the stern
+            Box(m, 0, 0.1, 0, 0.56, 0.2, 2.1); Box(m, 0, 0.4, 0.82, 0.46, 0.4, 0.3); Box(m, 0, 0.24, -0.15, 0.08, 0.08, 1.4);
+            models["tanker"] = m.ToArray();
+            m = new List<Tri>(); // passenger ship: tall superstructure and a funnel
+            Box(m, 0, 0.12, 0, 0.5, 0.24, 2.0); Box(m, 0, 0.38, 0.05, 0.42, 0.28, 1.4); Box(m, 0, 0.6, 0.3, 0.14, 0.2, 0.2);
+            models["liner"] = m.ToArray();
+            m = new List<Tri>(); // sailing boat: mast and sail
+            Box(m, 0, 0.07, 0, 0.3, 0.14, 1.2); Box(m, 0, 0.7, -0.1, 0.03, 1.2, 0.03);
+            Face(m, 0, 0.2, -0.08, 0, 1.25, -0.08, 0, 0.2, 0.55, 0, 0.2, 0.55, 0.95);
+            models["sail"] = m.ToArray();
         }
 
         private static void Model(Tri[] tris, double x, double y, double z, double heading, double s, Color c, double spin = double.NaN)
@@ -466,12 +528,14 @@ namespace LaunchCountdownSaver
         private void Traffic(double? t, double dt, double now)
         {
             Models();
-            var planes = Store.Planes; double unix = Store.Unix(DateTime.UtcNow);
+            var planes = new List<Plane>(); double unix = Store.Unix(DateTime.UtcNow);
+            if (Settings.Aircraft) planes.AddRange(Store.Planes);
+            if (Settings.Vessels) planes.AddRange(Store.Vessels);
             double? toT0 = t.HasValue ? -t.Value / 60 : (double?)null; // minutes until T-0
             bool corridorHot = toT0.HasValue && toT0 <= 120 && toT0 >= -15, forecast = toT0.HasValue && toT0 > 0 && toT0 <= 60;
             var t0 = l.Net ?? DateTime.UtcNow;
             bool flash = ((int)(now * 4) & 1) == 0;
-            Aircraft = Inside = Inbound = 0;
+            Aircraft = Vessels = Inside = Inbound = 0;
             var seen = new HashSet<string>();
             var lines = new List<double[]>(); // x1 y1 z1 x2 y2 z2 r g b a
 
@@ -479,10 +543,10 @@ namespace LaunchCountdownSaver
             foreach (var v in planes)
             {
                 double age = unix - v.T;
-                if (v.Ground || age > StaleMin * 60 || Flight.KmBetween(l.Lat, l.Lon, v.Lat, v.Lon) > TrafficKm) continue;
+                if (v.Ground || age > (v.Sea ? 3600 : StaleMin * 60) || Flight.KmBetween(l.Lat, l.Lon, v.Lat, v.Lon) > TrafficKm) continue;
                 double kmPerMin = v.Kt * 1.852 / 60, la, lo, x, z;
                 Flight.Destination(v.Lat, v.Lon, v.Track, kmPerMin * age / 60, out la, out lo);
-                double altFt = Math.Max(0, v.AltFt + v.Fpm * age / 60), y = altFt * 0.0003048 * vs;
+                double altFt = v.Sea ? 0 : Math.Max(0, v.AltFt + v.Fpm * age / 60), y = v.Sea ? 0.04 : altFt * 0.0003048 * vs;
                 World(la, lo, out x, out z);
 
                 // ease towards a corrected position instead of jumping when a new report arrives
@@ -502,17 +566,17 @@ namespace LaunchCountdownSaver
                     double fla, flo; Flight.Destination(la, lo, v.Track, kmPerMin * toT0.Value, out fla, out flo);
                     if (Flight.InCorridor(l, fla, flo) || InArea(Store.Areas, fla, flo, Math.Max(0, altFt + v.Fpm * toT0.Value), t0)) state = 1;
                 }
-                Aircraft++; if (state == 2) Inside++; else if (state == 1) Inbound++;
-                Color c = state == 2 ? (flash ? Color.FromArgb(255, 40, 40) : Color.FromArgb(255, 220, 30)) : state == 1 ? (flash ? Color.FromArgb(255, 40, 40) : Color.FromArgb(110, 20, 20)) : Air;
+                if (v.Sea) Vessels++; else Aircraft++; if (state == 2) Inside++; else if (state == 1) Inbound++;
+                Color c = state == 2 ? (flash ? Color.FromArgb(255, 40, 40) : Color.FromArgb(255, 220, 30)) : state == 1 ? (flash ? Color.FromArgb(255, 40, 40) : Color.FromArgb(110, 20, 20))   : v.Sea ? Ship : Air;
 
-                string kind = Flight.AircraftKind(v);
+                string kind = v.Sea ? Flight.VesselKind(v) : Flight.AircraftKind(v);
                 double camD = Math.Sqrt((x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez));
-                double s = ModelSize * camD * (kind == "heavy" ? 1.5 : kind == "jet" ? 1.15 : kind == "light" ? 0.8 : 0.85) * (state > 0 ? 1.4 : 1);
+                double s = ModelSize * camD * (kind == "heavy" || kind == "cargo" || kind == "tanker" || kind == "liner" ? 1.5 : kind == "jet" ? 1.15 : kind == "light" || kind == "sail" ? 0.8 : 0.85) * (state > 0 ? 1.4 : 1);
                 Model(models[kind], x, y, z, v.Track, s, c);
                 if (kind == "heli") Model(rotor, x, y, z, v.Track, s, c, now * 14);
 
                 // height line, and the projected track: where it will be in ten minutes, kept short for fast aircraft
-                lines.Add(new[] { x, y, z, x, 0, z, c.R / 255.0, c.G / 255.0, c.B / 255.0, 0.28 });
+                if (!v.Sea) lines.Add(new[] { x, y, z, x, 0, z, c.R / 255.0, c.G / 255.0, c.B / 255.0, 0.28 });
                 double horizon = kmPerMin > 0.05 ? Math.Min(10, TrackCapKm / kmPerMin) : 0;
                 if (horizon > 0)
                 {

@@ -45,11 +45,17 @@ Each section is its own tab; nothing scrolls as one long page. **Slideshow** (`P
 
 ## Windows screensaver
 
-`screensaver/` is a small WinForms program that shows the site full-screen in WebView2 as a `.scr`. Download the latest build from the [screensaver release](https://github.com/Coral-coder/launch-countdown/releases/tag/screensaver), extract the folder, right-click `LaunchCountdown.scr` and choose **Install**.
+`screensaver/` is a native Windows screensaver (.NET Framework 4.8, WinForms). It is not the site in a browser window: it fetches its own data and draws everything itself — the panels with GDI+, the 3D corridor with OpenGL through `opengl32.dll`. Download the latest build from the [screensaver release](https://github.com/Coral-coder/launch-countdown/releases/tag/screensaver), extract the folder, right-click `LaunchCountdown.scr` and choose **Install**.
 
-It opens the site with `?screensaver=1&secs=20`, which forces the slideshow, hides the controls and skips the video tab. The build is manual: run the **Build Windows screensaver** workflow from the Actions tab to publish a new version.
+- **Slides** mirror the site's tabs: countdown, live video, range map and radar, 3D ascent corridor, launch commit criteria, forecast, hourly, National Weather Service, upper air (skew-T and hodograph), sea state and space weather, mission, vehicle, updates, schedule and a full data listing. From T-1 hour it switches to the terminal count: clock top centre, corridor left, live video right, timeline below the video.
+- **3D corridor**: base map and radar mosaic on the ground, cloud layers as a volume, NEXRAD Level II reflectivity as a volume (decoded natively, including bzip2), the nominal ascent and its corridor, calculated telemetry, live aircraft (adsb.lol every 10 seconds) and vessels (aisstream.io, with a key) as small models with 5- and 10-minute track marks, NOTAM and NOTMAR areas, and the same inside/inbound alerts as the site. Vertical scale is 1× unless changed.
+- **Controls** are on the keyboard, because the mouse is ignored: `H` hold/resume, `Shift+S` scrub, `T` enter a new T-0, `R` reset, arrows for slides, `F1` for the full list. Only `Esc` or `Space` exits. A T-0 you set is kept until Launch Library publishes a different one.
+- **Settings** (`Settings…` in Screen Saver Settings): theme, launch sites, slides and timing, every 3D layer, display-off time, launch wake-up, stream address and AIS key.
+- **Data** comes straight from Launch Library 2, Open-Meteo, the National Weather Service, NOAA (radar, tides, space weather), adsb.lol and Esri. Two things are borrowed from this site's deploy: published launch azimuths (`data/launches.json`) and hazard areas (`data/hazards.json`).
+- **Live video** is the one panel that uses a browser engine (WebView2), since the streams are web players.
+- It does not keep the display awake outside the launch window, and a tray helper can wake the PC at T-10 minutes.
 
-It does not keep the display awake: there is no video playback and no power request, so the Windows display timer applies as usual, and the screensaver's own timer (default 30 minutes, set under **Settings…**) switches the monitor off as well.
+The build is manual: run the **Build Windows screensaver** workflow from the Actions tab to publish a new version. The `TEST` build symbol adds a `/shot` mode that renders slides to PNG under Mono and Mesa, which is how the drawing is checked without Windows.
 
 ## How the data gets there
 
@@ -57,7 +63,7 @@ Launch time and status update in each viewer's browser; everything a browser can
 
 - **Live, from the browser:** launch time, window, status and weather odds come from Launch Library 2 every ten minutes (it allows 15 requests an hour per address). All weather, the 2D radar and the 3D radar volume are also fetched directly by the browser.
 - **As of the last site update:** Next Spaceflight does not allow requests from web pages, so `scripts/fetch_launches.py` reads it when the site is deployed: hourly, on a push to `main`, or by running the workflow by hand. That snapshot supplies the full launch list and the Next Spaceflight-only details: launch azimuth, countdown timeline, recovery, statistics. When Launch Library has a newer edit for a launch, its time and status win; launches the snapshot does not know are added.
-- **Aircraft, vessels and hazard areas** (`scripts/fetch_traffic.py`) cannot be read from a browser either, so in a browser they are a snapshot refreshed by each deploy, and aircraft older than twenty minutes are not drawn. **In the Windows screensaver aircraft are live:** the page asks its host (`window.chrome.webview`) for the aircraft around the pad every 10 seconds, the screensaver fetches adsb.lol natively and posts the reply back. Vessels and hazard areas still come from the snapshot.
+- **Aircraft, vessels and hazard areas** (`scripts/fetch_traffic.py`) cannot be read from a browser either, so on the site they are a snapshot refreshed by each deploy, and aircraft older than twenty minutes are not drawn. The Windows screensaver fetches aircraft itself, so there they are live.
 
 The deploy writes `data/launches.json` (a light index), `data/launch/<id>.json` (full records for one launch), `data/cache.json` (carried between runs), `data/next.json`, `data/traffic.json` and `data/hazards.json`.
 

@@ -196,28 +196,40 @@ namespace LaunchCountdownSaver
         /// <summary>Turn a sleeping display back on.</summary>
         public static void WakeDisplay(IntPtr window)
         {
-            SetThreadExecutionState(ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-            if (window != IntPtr.Zero) SendMessage(window, WM_SYSCOMMAND, SC_MONITORPOWER, MonitorOn);
-            // Displays reliably wake on input; nudge the pointer one pixel and back.
-            mouse_event(0x0001, 0, 1, 0, UIntPtr.Zero);
-            mouse_event(0x0001, 0, -1, 0, UIntPtr.Zero);
+            try
+            {
+                SetThreadExecutionState(ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+                if (window != IntPtr.Zero) SendMessage(window, WM_SYSCOMMAND, SC_MONITORPOWER, MonitorOn);
+                // Displays reliably wake on input; nudge the pointer one pixel and back.
+                mouse_event(0x0001, 0, 1, 0, UIntPtr.Zero);
+                mouse_event(0x0001, 0, -1, 0, UIntPtr.Zero);
+            }
+            catch { }
         }
 
         /// <summary>Ask Windows to resume from sleep at the given time (needs wake timers allowed in the power plan).</summary>
         public static void ScheduleWake(DateTime utc)
         {
-            if (wakeTimer == IntPtr.Zero) wakeTimer = CreateWaitableTimer(IntPtr.Zero, true, null);
-            if (wakeTimer == IntPtr.Zero) return;
-            CancelWaitableTimer(wakeTimer);
-            if (utc <= DateTime.UtcNow) return;
-            long due = utc.ToFileTimeUtc();
-            SetWaitableTimer(wakeTimer, ref due, 0, IntPtr.Zero, IntPtr.Zero, true);
+            try
+            {
+                if (wakeTimer == IntPtr.Zero) wakeTimer = CreateWaitableTimer(IntPtr.Zero, true, null);
+                if (wakeTimer == IntPtr.Zero) return;
+                CancelWaitableTimer(wakeTimer);
+                if (utc <= DateTime.UtcNow) return;
+                long due = utc.ToFileTimeUtc();
+                SetWaitableTimer(wakeTimer, ref due, 0, IntPtr.Zero, IntPtr.Zero, true);
+            }
+            catch { }
         }
 
         public static double IdleSeconds()
         {
-            var i = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO)) };
-            return GetLastInputInfo(ref i) ? unchecked((uint)Environment.TickCount - i.dwTime) / 1000.0 : 0;
+            try
+            {
+                var i = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO)) };
+                return GetLastInputInfo(ref i) ? unchecked((uint)Environment.TickCount - i.dwTime) / 1000.0 : 0;
+            }
+            catch { return 0; }
         }
     }
 
@@ -335,7 +347,7 @@ namespace LaunchCountdownSaver
                 offTimer.Stop();
                 if (holding) return;
                 foreach (var f in forms) f.GoDark();
-                if (forms.Count > 0) Native.SendMessage(forms[0].Handle, Native.WM_SYSCOMMAND, Native.SC_MONITORPOWER, Native.MonitorOff);
+                try { if (forms.Count > 0) Native.SendMessage(forms[0].Handle, Native.WM_SYSCOMMAND, Native.SC_MONITORPOWER, Native.MonitorOff); } catch { }
             };
             ArmOffTimer();
             watch.Tick += (o, e) => OnTick();

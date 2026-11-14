@@ -19,7 +19,22 @@ namespace LaunchCountdownSaver
             var l = Store.Current;
             if (a.Length > 6 && l != null) Count.SetT0(l, DateTime.UtcNow.AddSeconds(-double.Parse(a[6])));
             Console.WriteLine("launch " + (l == null ? "none" : l.Name + " az " + l.Heading + (l.HeadingEstimated ? " est" : "")) + " · wx " + (Store.Weather != null) + " · clouds " + (Store.Cloud != null) +
-                " · map " + (Store.Map != null) + " · radar " + (Store.Radar != null) + " · planes " + Store.Planes.Count + " · areas " + Store.Areas.Count + " · " + Store.LaunchNote);
+                " · map " + (Store.Map != null) + " · radar " + (Store.Radar != null) + " · planes " + Store.Planes.Count + " · areas " + Store.Areas.Count + " · volume " + (Store.Volume == null ? Store.VolumeNote : Store.Volume.Id + " " + Store.Volume.Time.ToString("HH:mm") + " tilts " + Store.Volume.Tilts + " max " + Store.Volume.MaxDbz.ToString("0.0") + " dBZ top " + Store.Volume.EchoTop.ToString("0.0") + " km") + " · " + Store.LaunchNote);
+            if (Environment.GetEnvironmentVariable("FAKE") == "1" && l != null)
+            {
+                // a made-up storm cell, two ships and the wind column, to exercise the drawing
+                int n = RadarVolume.N; var v = new RadarVolume { Data = new byte[n * n * RadarVolume.NZ], Id = "TEST", Key = "x", Time = DateTime.UtcNow, Lat = l.Lat, Lon = l.Lon, Tilts = 9, MaxDbz = 58, EchoTop = 12 };
+                for (int k = 0; k < RadarVolume.NZ; k++) for (int j = 0; j < n; j++) for (int i = 0; i < n; i++)
+                {
+                    double dx = (i - n * 0.36) / 9.0, dy = (j - n * 0.6) / 7.0, dz = (k - 10) / 12.0, d = dx * dx + dy * dy + dz * dz;
+                    if (d < 1) v.Data[i + n * (j + n * k)] = (byte)((10 + 50 * (1 - d) + 32) * 2);
+                }
+                Store.Volume = v; Settings.Wind = true;
+                double t = Store.Unix(DateTime.UtcNow);
+                Store.Vessels = new System.Collections.Generic.List<Plane> {
+                    new Plane { Id = "s1", Name = "TEST CARGO", Sea = true, ShipType = 70, Lat = l.Lat + 0.12, Lon = l.Lon + 0.25, Kt = 14, Track = 200, T = t },
+                    new Plane { Id = "s2", Name = "TEST SAIL", Sea = true, ShipType = 36, Lat = l.Lat - 0.05, Lon = l.Lon + 0.15, Kt = 6, Track = 40, T = t } };
+            }
             var scene = new Scene3D();
             Bitmap view = null;
             foreach (var name in a[1].Split(','))
@@ -27,6 +42,7 @@ namespace LaunchCountdownSaver
                 string file = a[4].Replace("*", name);
                 if (name == "3d" || name == "chase" || name == "pad")
                 {
+                    scene = new Scene3D();
                     scene.View = name == "chase" ? Scene3D.Mode.Chase : name == "pad" ? Scene3D.Mode.Pad : Scene3D.Mode.Orbit;
                     using (var b = OffScreen.Render(scene, w, h, 3)) b.Save(file, ImageFormat.Png);
                     continue;
@@ -42,6 +58,7 @@ namespace LaunchCountdownSaver
                         if (lay.View3D.Width > 4)
                         {
                             var r = Rectangle.Round(lay.View3D);
+                            scene = new Scene3D(); // each off-screen render has its own context, so its own textures
                             scene.View = slide == Slide.Terminal ? Scene3D.Mode.Chase : Scene3D.Mode.Orbit;
                             view = OffScreen.Render(scene, r.Width, r.Height, 3);
                             g.DrawImageUnscaled(view, r.X, r.Y);

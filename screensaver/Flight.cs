@@ -113,6 +113,13 @@ namespace LaunchCountdownSaver
             return "light";
         }
 
+        /// <summary>boat, cargo, tanker, liner or sail, from the AIS ship type when one was heard.</summary>
+        public static string VesselKind(Plane v)
+        {
+            int t = v.ShipType;
+            return t >= 70 && t <= 79 ? "cargo" : t >= 80 && t <= 89 ? "tanker" : t >= 60 && t <= 69 ? "liner" : t == 36 || t == 37 ? "sail" : "boat";
+        }
+
         // ---------------------------------------------------------------- calculated telemetry
 
         private struct Air { public double T, P, Rho; public double? Kt, Dir; public string Src; }

@@ -149,7 +149,7 @@ namespace LaunchCountdownSaver
 
     internal sealed class Plane
     {
-        public string Id, Name, Type, Cat; public double Lat, Lon, AltFt, Kt, Track, Fpm, T; public bool Ground;
+        public string Id, Name, Type, Cat; public double Lat, Lon, AltFt, Kt, Track, Fpm, T; public bool Ground, Sea; public int ShipType;
     }
 
     internal sealed class Area
@@ -210,6 +210,7 @@ namespace LaunchCountdownSaver
             try { var cached = File.ReadAllText(Path.Combine(Dir, "launches.json")); ParseLaunches(cached, "saved copy"); } catch { }
             new Thread(Slow) { IsBackground = true, Name = "data" }.Start();
             if (!light) new Thread(Fast) { IsBackground = true, Name = "aircraft" }.Start();
+            if (!light) new Thread(Ais) { IsBackground = true, Name = "vessels" }.Start();
         }
 
         private static void Problem(string what, Exception e)
@@ -227,7 +228,7 @@ namespace LaunchCountdownSaver
             {
                 new Job { Run = LoadLaunches, Every = 600 }, new Job { Run = LoadHeadings, Every = 1800 }, new Job { Run = LoadWeather, Every = 600 },
                 new Job { Run = LoadClouds, Every = 1800 }, new Job { Run = LoadMap, Every = 86400 }, new Job { Run = LoadRadar, Every = 300 }, new Job { Run = LoadAreas, Every = 600 },
-                new Job { Run = LoadNws, Every = 900 }, new Job { Run = LoadSea, Every = 1800 }, new Job { Run = LoadSpace, Every = 900 },
+                new Job { Run = LoadNws, Every = 900 }, new Job { Run = LoadSea, Every = 1800 }, new Job { Run = LoadSpace, Every = 900 }, new Job { Run = LoadVolume, Every = 150 },
             };
             if (light) jobs = new[] { new Job { Run = LoadLaunches, Every = 900 } };
             while (true)
