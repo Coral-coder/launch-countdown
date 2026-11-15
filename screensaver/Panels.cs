@@ -322,7 +322,7 @@ namespace LaunchCountdownSaver
                 new[] { "+  −", "seconds per slide" }, new[] { "L", "follow the next launch in the list" }, new[] { "C", "theme" }, new[] { "E", "terminal-count layout on / off" },
                 new[] { "I", "live video on / off" }, new[] { "V", "3D view" }, new[] { "X", "3D vertical scale" }, new[] { "O  D", "cloud volume / radar volume" },
                 new[] { "A  B  N", "aircraft / vessels / NOTAM and NOTMAR areas" }, new[] { "W", "wind arrows and labels" }, new[] { "G  Y", "telemetry / key" },
-                new[] { "M", "cloud and wind fields for launch time or now" }, new[] { "U", "upper-wind source: automatic, profiler, balloon, model" }, new[] { "F1  K", "this list" }, new[] { "F11", "full screen (app)" },
+                new[] { "M", "cloud and wind fields for launch time or now" }, new[] { "U", "upper-wind source: automatic, live balloon, radar, sounding, model" }, new[] { "F1  K", "this list" }, new[] { "F11", "full screen (app)" },
             };
             float ky = c2.Y, lh = (c2.Height) / keys.Length;
             foreach (var k in keys) { Text(k[0], c2.X, ky, 17, th.Accent, true, true); Text(k[1], c2.X + 190 * u, ky, 17, th.Ink); ky += lh; }
@@ -478,7 +478,7 @@ namespace LaunchCountdownSaver
             bool live = (now - Store.PlanesAt).TotalSeconds < 60;
             if (Scene != null && View3DAvailable)
             {
-                row("Aircraft within 220 km", !Settings.Aircraft ? "off" : live ? Scene.Aircraft.ToString() : "feed not answering");
+                row(Settings.AircraftMiles > 0 ? "Aircraft within " + Settings.AircraftMiles + " mi of the NOTAM" : "Aircraft within 220 km", !Settings.Aircraft ? "off" : live ? Scene.Aircraft.ToString() : "feed not answering");
                 row("Vessels within 220 km", !Settings.Vessels ? "off" : Store.VesselNote.Length > 0 ? Store.VesselNote : Scene.Vessels.ToString());
                 Text(Up("Inside a hazard area"), c.X, y + 3 * u, 13, th.Muted); Text(Scene.Inside.ToString(), c.Right, y, 17, Scene.Inside > 0 ? th.Bad : th.Ink, true, true, 1); y += lh;
                 Text(Up("Inbound at T-0"), c.X, y + 3 * u, 13, th.Muted); Text(Scene.Inbound.ToString(), c.Right, y, 17, Scene.Inbound > 0 ? th.Bad : th.Ink, true, true, 1); y += lh;
@@ -507,9 +507,9 @@ namespace LaunchCountdownSaver
             key(Color.FromArgb(180, 184, 188), "Aircraft, with track for the next 10 min");
             key(th.Bad, "Aircraft inside an area or the corridor");
             y += 10 * u; Line(th.Line, 1, c.X, y, c.Right, y); y += 14 * u;
-            int n = Store.Planes.Count(p => !p.Ground && Flight.KmBetween(l.Lat, l.Lon, p.Lat, p.Lon) <= 300);
+            int n = Store.Planes.Count(p => !p.Ground && (Settings.AircraftMiles > 0 ? Flight.KmToNotam(l, p.Lat, p.Lon, Store.Areas) <= Settings.AircraftMiles * 1.609344 : Flight.KmBetween(l.Lat, l.Lon, p.Lat, p.Lon) <= 300));
             bool live = (now - Store.PlanesAt).TotalSeconds < 60;
-            Fact(c.X, y, c.Width, "Aircraft on the map", live ? n.ToString() : "—", live ? "live, updated every 10 seconds" : "aircraft feed not answering"); y += 92 * u;
+            Fact(c.X, y, c.Width, "Aircraft on the map", live ? n.ToString() : "—", live ? "live, every 10 seconds" + (Settings.AircraftMiles > 0 ? " · within " + Settings.AircraftMiles + " mi of the NOTAM" : "") : "aircraft feed not answering"); y += 92 * u;
             Fact(c.X, y, c.Width, "Radar", Store.Radar != null ? Store.Radar.At.ToString("HH:mm") + " UTC" : "—", Store.Radar != null ? "NOAA composite reflectivity" : "no radar picture for this site"); y += 92 * u;
             Fact(c.X, y, c.Width, "Hazard areas", Store.Areas.Count(a => !a.To.HasValue || a.To.Value > now).ToString(), "from the countdown site's snapshot");
         }
@@ -562,6 +562,7 @@ namespace LaunchCountdownSaver
             foreach (var v in Store.Planes)
             {
                 double age = unix - v.T; if (v.Ground || age > 1200) continue;
+                if (Settings.AircraftMiles > 0 && Flight.KmToNotam(l, v.Lat, v.Lon, Store.Areas) > Settings.AircraftMiles * 1.609344) continue;
                 double kmMin = v.Kt * 1.852 / 60, la, lo; Flight.Destination(v.Lat, v.Lon, v.Track, kmMin * age / 60, out la, out lo);
                 var p = pt(la, lo); if (!r.Contains(p)) continue;
                 bool cleared = Flight.IsJolly(v), alert = !cleared && ((hot && Flight.InCorridor(l, la, lo)) || Store.Areas.Any(a => (!a.To.HasValue || a.To.Value > now) && (!a.From.HasValue || (a.From.Value - now).TotalHours < 2) && a.Rings.Any(q => Flight.InRing(la, lo, q))));

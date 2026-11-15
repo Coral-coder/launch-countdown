@@ -49,6 +49,11 @@ namespace LaunchCountdownSaver
         {
             get { var l = v as List<object>; return l != null && index >= 0 && index < l.Count ? new J(l[index]) : Null; }
         }
+        /// <summary>The members of an object, by name.</summary>
+        public IEnumerable<KeyValuePair<string, J>> Members
+        {
+            get { var d = v as Dictionary<string, object>; if (d != null) foreach (var kv in d) yield return new KeyValuePair<string, J>(kv.Key, new J(kv.Value)); }
+        }
         public IEnumerable<J> Items
         {
             get { var l = v as List<object>; if (l != null) foreach (var o in l) yield return new J(o); }

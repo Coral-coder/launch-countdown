@@ -42,7 +42,9 @@ namespace LaunchCountdownSaver
         {
             if (!ready || url == loaded) return;
             loaded = url;
-            try { web.CoreWebView2.Navigate(url ?? "about:blank"); } catch { Failed = true; }
+            // The players are opened inside a small page on the countdown site rather than directly: YouTube
+            // refuses (error 153) when its player has no embedding page to name as the referrer.
+            try { web.CoreWebView2.Navigate(url == null ? "about:blank" : Settings.SiteBase() + "player.html#" + Uri.EscapeDataString(url)); } catch { Failed = true; }
         }
 
         public override void Show(string address, Rectangle bounds)

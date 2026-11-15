@@ -389,6 +389,7 @@ const AIR = 0xb4b8bc, // aircraft are a neutral 70% white so the alert colours s
    SEA = 0x6fe36f, NOTAM = 0xffd21f, NOTMAR = 0xff5a36;
 const TRACK_CAP_KM = 25;      // a projected track is never drawn longer than this
 const TRAFFIC_KM = 220;       // only traffic this close to the pad is drawn
+const AIRCRAFT_KM = 30 * 1.609344; // and aircraft only within 30 miles of the launch NOTAM airspace
 const SIZE = 0.01;            // model size as a fraction of its distance from the camera
 const STALE_MIN = 20;         // aircraft older than this are dropped; vessels move slowly enough to keep
 let traffic = null, hazards = null, trafficGroup = null, movers = [], trafficNote = 'traffic snapshot loading…', lastMove = 0;
@@ -505,6 +506,23 @@ function inCorridor(lat, lon) {
 }
 const hhmm = (iso) => (iso ? new Date(iso).toISOString().slice(11, 16) + 'Z' : '?');
 
+/** Distance to the nearest launch NOTAM airspace in km (zero inside one); to the pad when none is published. */
+function kmToNotam(lat, lon, areas) {
+  let best = null; const kx = 111.19 * Math.cos(rad(lat)), ky = 111.19;
+  for (const a of areas) {
+    if (a.kind !== 'notam') continue;
+    for (const ring of a.rings) {
+      if (inRing(lat, lon, ring)) return 0;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const ax = (ring[j][1] - lon) * kx, ay = (ring[j][0] - lat) * ky, dx = (ring[i][1] - lon) * kx - ax, dy = (ring[i][0] - lat) * ky - ay;
+        const len = dx * dx + dy * dy, t = len > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len)) : 0, d = Math.hypot(ax + dx * t, ay + dy * t);
+        if (best == null || d < best) best = d;
+      }
+    }
+  }
+  return best ?? kmBetween(launch.pad.lat, launch.pad.lon, lat, lon);
+}
+
 async function loadTraffic() {
   if (!launch) return;
   const get = async (name, file) => { try { return await getJSON(name, `data/${file}?t=${Date.now()}`, { keep: false }); } catch { return null; } };
@@ -552,6 +570,7 @@ function buildTraffic() {
   const add = (v, sea) => {
     const { lat, lon } = launch.pad;
     if (v.lat == null || kmBetween(lat, lon, v.lat, v.lon) > TRAFFIC_KM) return;
+    if (!sea && kmToNotam(v.lat, v.lon, areas) > AIRCRAFT_KM) return;
     if (!sea && (v.ground || (now() / 1000 - v.t) / 60 > STALE_MIN)) return;
     const jolly = !sea && isJolly(v), color = sea ? SEA : jolly ? JOLLY : AIR;
     // Lit models, drawn after the weather volumes so they stay visible through cloud and radar.

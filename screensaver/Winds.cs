@@ -19,11 +19,11 @@ namespace LaunchCountdownSaver
 
     internal static class Winds
     {
-        private static readonly string[] Order = { "auto", "profiler", "balloon", "model" };
+        private static readonly string[] Order = { "auto", "sonde", "profiler", "balloon", "model" };
         public static string NextSource(string s) { return Order[(Array.IndexOf(Order, s) + 1 + Order.Length) % Order.Length]; }
         public static string SourceName(string s)
         {
-            switch (s) { case "profiler": return "radar wind profiler"; case "balloon": return "weather balloon"; case "model": return "forecast model"; default: return "automatic (newest measurement near launch, model otherwise)"; }
+            switch (s) { case "sonde": return "live balloon (SondeHub)"; case "profiler": return "radar wind profiler"; case "balloon": return "weather balloon"; case "model": return "forecast model"; default: return "automatic (newest measurement near launch, model otherwise)"; }
         }
 
         private static string Age(Sounding s)
@@ -44,15 +44,18 @@ namespace LaunchCountdownSaver
             int hNow = w.Hour(now), hT0 = l.Net.HasValue ? w.Hour(l.Net.Value) : -1;
             bool near = !l.Net.HasValue || Math.Abs((l.Net.Value - now).TotalHours) < 6;
             string src = Settings.UpperSource; Sounding obs = null; string missing = null;
-            var prof = Store.Profiler; var ball = Store.Balloon;
+            var prof = Store.Profiler; var ball = Store.Balloon; var sonde = Store.Sonde;
             Func<Sounding, double, bool> good = (s, maxAge) => s != null && s.Levels.Count >= 3 && s.AgeMinutes <= maxAge && Flight.KmBetween(l.Lat, l.Lon, s.Lat, s.Lon) < 350;
-            if (src == "profiler") { if (good(prof, 180)) obs = prof; else missing = "no current profiler data for this site"; }
+            if (src == "sonde") { if (good(sonde, 12 * 60)) obs = sonde; else missing = "no balloon heard near this site lately"; }
+            else if (src == "profiler") { if (good(prof, 180)) obs = prof; else missing = "no current profiler data for this site"; }
             else if (src == "balloon") { if (good(ball, 36 * 60)) obs = ball; else missing = "no recent balloon for this site"; }
-            else if (src != "model" && near && (good(prof, 45) || good(ball, 12 * 60)))
+            else if (src != "model" && near && (good(prof, 45) || good(ball, 12 * 60) || good(sonde, 6 * 60)))
             {
                 // everything measured: the balloon over the model, then the radar's fresher low-level winds over that
                 var lv = w.Profile(hNow); var parts = new List<string>();
+                // the archived sounding first, then a balloon being tracked live if it is the newer of the two
                 if (good(ball, 12 * 60)) { lv = Merge(ball, lv); parts.Add(ball.Name + " " + ball.Station + " " + Age(ball)); }
+                if (good(sonde, 6 * 60) && (!good(ball, 12 * 60) || sonde.At > ball.At)) { lv = Merge(sonde, lv); parts.Add(sonde.Name + " " + sonde.Station + " " + Age(sonde)); }
                 if (good(prof, 45)) { lv = Merge(prof, lv); parts.Add(prof.Name + " " + prof.Station + " " + Age(prof)); }
                 label = string.Join(" + ", parts) + " · model above";
                 return lv;
@@ -106,7 +109,8 @@ namespace LaunchCountdownSaver
 
     internal static partial class Store
     {
-        public static volatile Sounding Balloon, Profiler;
+        public static volatile Sounding Balloon, Profiler, Sonde;
+        public static volatile string SondeNote = "listening for balloons…";
         public static volatile string BalloonNote = "looking for a balloon sounding…", ProfilerNote = "looking for profiler data…";
 
         // Upper-air stations near launch sites: id, name, latitude, longitude, WMO number. The first three are the ranges' own.
@@ -153,7 +157,8 @@ namespace LaunchCountdownSaver
                             // time, lon, lat, pressure hPa, height m, temperature, dew point, ice point, RH %, RH ice, mixing ratio, direction, speed m/s
                             var f = row.Split(','); if (f.Length < 13) continue;
                             Func<int, double> n = i => { double v; return double.TryParse(f[i].Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v) ? v : double.NaN; };
-                            if (double.IsNaN(n(4))) continue;
+                            // some stations publish a level every second of flight: one per hundred metres is plenty
+                            if (double.IsNaN(n(4)) || (s.Levels.Count > 0 && n(4) - s.Levels[s.Levels.Count - 1].Z < 100)) continue;
                             s.Levels.Add(new Level { P = n(3), Z = n(4), T = n(5), Rh = n(8), Dir = n(11), Kt = n(12) * 1.94384 });
                         }
                     }
@@ -181,6 +186,56 @@ namespace LaunchCountdownSaver
                 catch { }
             }
             return null;
+        }
+
+        private static string sondeKey = "";
+
+        /// <summary>
+        /// Balloons being tracked live by SondeHub's receivers near the pad. A balloon drifts with the air, so
+        /// its speed and direction of travel at each height are the wind there: no need to wait for the
+        /// sounding to be published. The ranges' launch-day balloons show up here within seconds.
+        /// </summary>
+        private static void LoadSonde()
+        {
+            var c = Current; if (c == null || !c.HasPad) return;
+            var all = J.Parse(Get("https://api.v2.sondehub.org/sondes?lat=" + F(c.Lat) + "&lon=" + F(c.Lon) + "&distance=300000&last=21600"));
+            // the one still climbing, else the one heard most recently
+            string serial = null; DateTime newest = DateTime.MinValue; bool climbing = false;
+            foreach (var kv in all.Members)
+            {
+                var t = kv.Value["datetime"].Time; if (!t.HasValue) continue;
+                bool up = kv.Value["vel_v"].N() > 0.5 && (DateTime.UtcNow - t.Value).TotalMinutes < 10;
+                if ((up && !climbing) || (up == climbing && t.Value > newest)) { serial = kv.Key; newest = t.Value; climbing = up; }
+            }
+            if (serial == null) { if (Sonde != null && Sonde.AgeMinutes > 12 * 60) Sonde = null; SondeNote = "no balloon heard within 300 km in the last 6 hours"; return; }
+            string key = serial + newest.Ticks;
+            if (key == sondeKey) return; // nothing new from it
+            var frames = J.Parse(Get("https://api.v2.sondehub.org/sonde/" + serial));
+            // ascent only, averaged into 250 m layers
+            var bins = new SortedDictionary<int, double[]>(); DateTime last = DateTime.MinValue; double lat0 = c.Lat, lon0 = c.Lon; bool first = true;
+            foreach (var f in frames.Items)
+            {
+                double alt = f["alt"].N(double.NaN), v = f["vel_h"].N(double.NaN), h = f["heading"].N(double.NaN);
+                if (double.IsNaN(alt) || double.IsNaN(v) || double.IsNaN(h) || f["vel_v"].N() < 0.5) continue;
+                if (first) { lat0 = f["lat"].N(c.Lat); lon0 = f["lon"].N(c.Lon); first = false; }
+                var at = f["datetime"].Time; if (at.HasValue && at.Value > last) last = at.Value;
+                int b = (int)(alt / 250); double[] q;
+                if (!bins.TryGetValue(b, out q)) bins[b] = q = new double[7];
+                // travelling towards "heading" means the wind blows from the opposite direction
+                q[0] += v * Math.Sin(h * Math.PI / 180); q[1] += v * Math.Cos(h * Math.PI / 180); q[2] += alt; q[3]++;
+                double tc = f["temp"].N(double.NaN), rh = f["humidity"].N(double.NaN), p = f["pressure"].N(double.NaN);
+                if (!double.IsNaN(tc) && tc > -150) { q[4] += tc; q[5]++; }
+                if (!double.IsNaN(p) && p > 0) q[6] = p;
+            }
+            if (bins.Count < 4) { SondeNote = "balloon " + serial + " heard, but too little of its climb yet"; return; }
+            var s = new Sounding { Kind = "sonde", Station = serial, Name = "live balloon", WindOnly = true, At = last, Lat = lat0, Lon = lon0 };
+            foreach (var q in bins.Values)
+            {
+                double u = q[0] / q[3], vv = q[1] / q[3];
+                s.Levels.Add(new Level { Z = q[2] / q[3], Kt = Math.Sqrt(u * u + vv * vv) * 1.94384, Dir = (Math.Atan2(u, vv) * 180 / Math.PI + 180 + 360) % 360,
+                    T = q[5] > 0 ? q[4] / q[5] : double.NaN, P = q[6] > 0 ? q[6] : double.NaN, Rh = double.NaN });
+            }
+            Sonde = s; sondeKey = key; SondeNote = climbing ? "" : "";
         }
 
         /// <summary>

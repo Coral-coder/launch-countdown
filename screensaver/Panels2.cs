@@ -224,12 +224,14 @@ namespace LaunchCountdownSaver
             float half = s.Width / 2, sy = s.Y;
             Fact(s.X, sy, half, "CAPE", Num(w.Cape[hr]) + " J/kg"); Fact(s.X + half, sy, half, "Freezing level", double.IsNaN(freezing) ? "—" : (freezing / 1000).ToString("0.0") + " km", double.IsNaN(freezing) ? null : (freezing * 3.28084).ToString("#,0") + " ft"); sy += 92 * u;
             Fact(s.X, sy, half, "Strongest wind", Num(jet.Kt) + " kt", "at " + (jet.Z / 1000).ToString("0.0") + " km, " + jet.P.ToString("0") + " hPa");
-            Fact(s.X + half, sy, half, "Coldest level", (trop / 1000).ToString("0.0") + " km", Num(lv.Min(q => q.T)) + " °C"); sy += 96 * u;
+            Fact(s.X + half, sy, half, "Coldest level", (trop / 1000).ToString("0.0") + " km", Num(lv.Min(q => q.T)) + " °C"); sy += 88 * u;
             // what each source has right now, and which one is in use
             var bal = Store.Balloon; var pro = Store.Profiler;
-            Action<string, string, bool> line = (k, v, ok) => { Text(Up(k), s.X, sy + 2 * u, 12, th.Muted, true); Text(v, s.X + 150 * u, sy, 14, ok ? th.Ink : th.Muted, false, false, -1, s.Width - 150 * u); sy += 24 * u; };
+            Action<string, string, bool> line = (k, v, ok) => { Text(Up(k), s.X, sy + 2 * u, 12, th.Muted, true); Text(v, s.X + 150 * u, sy, 14, ok ? th.Ink : th.Muted, false, false, -1, s.Width - 150 * u); sy += 22 * u; };
             line("In use", Settings.UpperSource == "auto" ? "automatic: measurements near launch" : Winds.SourceName(Settings.UpperSource), true);
-            line("Balloon", bal != null ? bal.Station + " " + bal.At.ToString("ddd HH:mm") + " UTC · to " + (bal.Levels.Max(q => q.Z) / 1000).ToString("0") + " km" : Store.BalloonNote, bal != null);
+            var snd = Store.Sonde;
+            line("Live balloon", snd != null ? "SondeHub " + snd.Station + " · " + snd.At.ToString("HH:mm") + " UTC · " + (snd.Levels.Min(q => q.Z) / 1000).ToString("0.0") + "–" + (snd.Levels.Max(q => q.Z) / 1000).ToString("0") + " km" : Store.SondeNote, snd != null);
+            line("Sounding", bal != null ? bal.Station + " " + bal.At.ToString("ddd HH:mm") + " UTC · to " + (bal.Levels.Max(q => q.Z) / 1000).ToString("0") + " km" : Store.BalloonNote, bal != null);
             line("Radar profile", pro != null ? pro.Station + " " + pro.At.ToString("HH:mm") + " UTC · to " + (pro.Levels.Max(q => q.Z) / 1000).ToString("0.0") + " km" : Store.ProfilerNote, pro != null);
             line("TDRWP", "no public live feed (NASA's archive runs months behind)", false);
             line("Model", "Open-Meteo, hourly, to 16 km", true);
@@ -375,7 +377,7 @@ namespace LaunchCountdownSaver
             {
                 { "LoadLaunches", "Launches · Launch Library 2" }, { "LoadHeadings", "Azimuths · countdown site" }, { "LoadWeather", "Weather · Open-Meteo" }, { "LoadClouds", "Cloud layers · Open-Meteo" },
                 { "LoadMap", "Base map · Esri" }, { "LoadRadar", "Radar mosaic · NOAA" }, { "LoadAreas", "Hazard areas · countdown site" }, { "LoadNws", "Weather Service · NWS" },
-                { "LoadSea", "Sea state and tides · Open-Meteo, NOAA" }, { "LoadSpace", "Space weather · NOAA SWPC" }, { "LoadVolume", "Radar volume · NEXRAD Level II" }, { "LoadVessels", "Vessels · aisstream.io" },
+                { "LoadSea", "Sea state and tides · Open-Meteo, NOAA" }, { "LoadSpace", "Space weather · NOAA SWPC" }, { "LoadVolume", "Radar volume · NEXRAD Level II" }, { "LoadSonde", "Live balloons · SondeHub" }, { "LoadBalloon", "Soundings · Wyoming, Iowa State" }, { "LoadProfiler", "Radar wind profile · NWS" }, { "LoadVessels", "Vessels · aisstream.io" },
             };
             y = f.Y; lh = Math.Min(32 * u, f.Height / (names.Count + 1));
             lock (Store.Feeds)
@@ -390,7 +392,7 @@ namespace LaunchCountdownSaver
             var s = Card(new RectangleF(r.X + lw + gap, r.Y + r.Height * 0.55f + gap, r.Width - lw - gap, r.Height * 0.45f - gap), "Settings in use");
             var set = new[]
             {
-                new[] { "theme", Settings.Theme }, new[] { "sites", Settings.SiteIds.Length == 0 ? "everywhere" : "Launch Library locations " + Settings.SiteIds }, new[] { "seconds per slide", Settings.SecondsPerTab.ToString() },
+                new[] { "version", (Updater.Version.Length >= 7 ? Updater.Version.Substring(0, 7) : "unknown") + (Settings.AutoUpdate ? " · updates automatically" : " · automatic update off") }, new[] { "theme", Settings.Theme }, new[] { "sites", Settings.SiteIds.Length == 0 ? "everywhere" : "Launch Library locations " + Settings.SiteIds }, new[] { "seconds per slide", Settings.SecondsPerTab.ToString() },
                 new[] { "display off after", Settings.DisplayOffMinutes == 0 ? "left to Windows" : Settings.DisplayOffMinutes + " min" }, new[] { "wake for launch", Settings.WakeForLaunch.ToString() },
                 new[] { "terminal layout", Settings.TerminalLayout.ToString() }, new[] { "3D", "view " + Settings.View + " · scale " + Settings.VerticalScale + "× · fields for " + (Settings.CloudTime == "now" ? "now" : "launch time") },
                 new[] { "3D layers", string.Join(" ", new[] { Settings.Clouds ? "clouds" : null, Settings.RadarVolume ? "radar" : null, Settings.Aircraft ? "aircraft" : null, Settings.Vessels ? "vessels" : null, Settings.Hazards ? "hazards" : null, Settings.Wind ? "wind" : null }.Where(x => x != null)) },

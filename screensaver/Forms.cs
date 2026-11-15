@@ -115,6 +115,7 @@ namespace LaunchCountdownSaver
         {
             if (preview && !Native.IsWindow(previewParent)) { Close(); return; }
             if (dark || ClientSize.Width < 8 || ClientSize.Height < 8) return;
+            if (primary && Updater.Note.Length > 0) { toast = Updater.Note; toastUntil = DateTime.UtcNow.AddSeconds(12); Updater.Note = ""; force = true; }
             var now = DateTime.UtcNow; var l = Store.Current;
             double t = l != null && l.Net.HasValue ? (now - l.Net.Value).TotalSeconds : double.NaN;
             bool terminal = !preview && Settings.TerminalLayout && l != null && l.Precise && t >= -3600 && t <= 900;
@@ -426,6 +427,7 @@ namespace LaunchCountdownSaver
             var videoOn = check(d, "Show live video (pad and weather stream, launch webcast near T-0)", 14, 162, Settings.Video);
             var wake = check(d, "Wake the display 10 minutes before launch and show the countdown", 14, 198, Settings.WakeForLaunch);
             note(d, "Adds a small helper to the notification area that starts when you sign in. It wakes the PC and the display at T-10 minutes, keeps them on until T+15 minutes, then lets them sleep again. Waking from sleep needs \"Allow wake timers\" in the Windows power plan, and a locked PC shows the lock screen.", 32, 222, 64);
+            var update = check(d, "Update automatically when a newer version is published", 14, 356, Settings.AutoUpdate);
             note(d, "While it runs: Escape or Space exits and the mouse is ignored. H hold/resume · Shift+S scrub · T set T-0 · R reset · ←/→ slides · P pause · L next launch · C theme · F1 all keys.", 14, 300, 50);
 
             // ---- sites
@@ -466,6 +468,8 @@ namespace LaunchCountdownSaver
             label(v, "Cloud and wind fields for", 326, 232);
             var when = new ComboBox { Left = 326, Top = 252, Width = 160, DropDownStyle = ComboBoxStyle.DropDownList };
             when.Items.AddRange(new object[] { "Launch time", "Now" }); when.SelectedIndex = Settings.CloudTime == "now" ? 1 : 0; v.Controls.Add(when);
+            label(v, "Show aircraft within this many miles of the launch NOTAM (0 = everything in range)", 14, 340);
+            var miles = new NumericUpDown { Left = 14, Top = 360, Width = 90, Minimum = 0, Maximum = 150, Value = Math.Max(0, Math.Min(150, Settings.AircraftMiles)) }; v.Controls.Add(miles);
             note(v, "The terminal count always uses the chase view, which follows the vehicle and pulls back as it speeds up.", 14, 292, 40);
 
             // ---- sources
@@ -478,8 +482,8 @@ namespace LaunchCountdownSaver
             var url = new TextBox { Left = 14, Top = 156, Width = 540, Text = Settings.Url }; so.Controls.Add(url);
             label(so, "Upper-level winds, for the displays and the calculations", 14, 270);
             var upper = new ComboBox { Left = 14, Top = 290, Width = 540, DropDownStyle = ComboBoxStyle.DropDownList };
-            var upperIds = new[] { "auto", "profiler", "balloon", "model" };
-            upper.Items.AddRange(new object[] { "Automatic: newest measurement when T-0 is within 6 hours, forecast otherwise", "Radar wind profile (NEXRAD VAD, about every 5 minutes, low levels)", "Weather balloon (radiosonde, newest launch)", "Forecast model" });
+            var upperIds = new[] { "auto", "sonde", "profiler", "balloon", "model" };
+            upper.Items.AddRange(new object[] { "Automatic: newest measurements when T-0 is within 6 hours, forecast otherwise", "Live balloon (SondeHub, as it climbs)", "Radar wind profile (NEXRAD VAD, about every 5 minutes, low levels)", "Published sounding (radiosonde, newest launch)", "Forecast model" });
             upper.SelectedIndex = Math.Max(0, Array.IndexOf(upperIds, Settings.UpperSource)); so.Controls.Add(upper);
             note(so, "The KSC TDRWP profiler has no public live feed, so the radar wind profile from the nearest NEXRAD stands in for it.", 14, 320, 40);
             note(so, "Everything else is fetched directly by the screensaver: launches from Launch Library 2, weather from Open-Meteo and the National Weather Service, radar from NOAA, aircraft from adsb.lol, tides from NOAA CO-OPS, space weather from NOAA SWPC.", 14, 196, 60);
@@ -492,7 +496,7 @@ namespace LaunchCountdownSaver
             ok.Click += (o, e) =>
             {
                 Settings.Theme = (string)theme.SelectedItem; Settings.SecondsPerTab = (int)secs.Value; Settings.DisplayOffMinutes = (int)off.Value;
-                Settings.TerminalLayout = terminal.Checked; Settings.Video = videoOn.Checked; Settings.WakeForLaunch = wake.Checked;
+                Settings.TerminalLayout = terminal.Checked; Settings.Video = videoOn.Checked; Settings.WakeForLaunch = wake.Checked; Settings.AutoUpdate = update.Checked;
                 var picked = new List<string>();
                 for (int i = 0; i < LaunchCountdownSaver.Site.All.Length; i++) if (sites.GetItemChecked(i)) picked.AddRange(LaunchCountdownSaver.Site.All[i].Ids.Select(x => x.ToString()));
                 Settings.SiteIds = everywhere.Checked ? "" : picked.Count > 0 ? string.Join(",", picked) : "12,27";
@@ -500,7 +504,7 @@ namespace LaunchCountdownSaver
                 for (int i = 0; i < names.Count; i++) if (slides.GetItemChecked(i)) on.Add(names[i].ToString());
                 Settings.Slides = on.Count == names.Count ? "" : string.Join(",", on);
                 Settings.Clouds = clouds.Checked; Settings.RadarVolume = radar.Checked; Settings.Aircraft = air.Checked; Settings.Vessels = sea.Checked; Settings.Hazards = haz.Checked;
-                Settings.Wind = wind.Checked; Settings.MapKey = key.Checked; Settings.Telemetry = tele.Checked; Settings.View = (string)view.SelectedItem;
+                Settings.Wind = wind.Checked; Settings.MapKey = key.Checked; Settings.Telemetry = tele.Checked; Settings.View = (string)view.SelectedItem; Settings.AircraftMiles = (int)miles.Value;
                 Settings.VerticalScale = int.Parse(((string)scale.SelectedItem).TrimEnd('×')); Settings.CloudTime = when.SelectedIndex == 1 ? "now" : "t0";
                 Settings.Stream = string.IsNullOrWhiteSpace(stream.Text) ? Settings.DefaultStream : stream.Text.Trim(); Settings.AisKey = ais.Text.Trim();
                 Settings.Url = string.IsNullOrWhiteSpace(url.Text) ? Settings.DefaultUrl : url.Text.Trim(); Settings.UpperSource = upperIds[upper.SelectedIndex];

@@ -36,7 +36,7 @@ namespace LaunchCountdownSaver
                     new Plane { Id = "s2", Name = "TEST SAIL", Sea = true, ShipType = 36, Lat = l.Lat - 0.05, Lon = l.Lon + 0.15, Kt = 6, Track = 40, T = t } };
             }
             bool bar = Environment.GetEnvironmentVariable("BAR") == "1"; var tabs = Settings.SlideList(true); tabs.Add(Slide.Terminal);
-            { string src; var lv = Winds.For(l, out src); Console.WriteLine("winds: " + src + " · " + lv.Count + " levels · balloon " + (Store.Balloon == null ? Store.BalloonNote : Store.Balloon.Station + " " + Store.Balloon.At.ToString("dd HH:mm") + " " + Store.Balloon.Levels.Count) + " · profiler " + (Store.Profiler == null ? Store.ProfilerNote : Store.Profiler.Station + " " + Store.Profiler.At.ToString("HH:mm") + " " + Store.Profiler.Levels.Count)); }
+            { string src; var lv = Winds.For(l, out src); Console.WriteLine("winds: " + src + " · " + lv.Count + " levels · balloon " + (Store.Balloon == null ? Store.BalloonNote : Store.Balloon.Station + " " + Store.Balloon.At.ToString("dd HH:mm") + " " + Store.Balloon.Levels.Count) + " · sonde " + (Store.Sonde == null ? Store.SondeNote : Store.Sonde.Station + " " + Store.Sonde.At.ToString("HH:mm") + " " + Store.Sonde.Levels.Count + " layers") + " · profiler " + (Store.Profiler == null ? Store.ProfilerNote : Store.Profiler.Station + " " + Store.Profiler.At.ToString("HH:mm") + " " + Store.Profiler.Levels.Count)); }
             var scene = new Scene3D();
             Bitmap view = null;
             foreach (var name in a[1].Split(','))

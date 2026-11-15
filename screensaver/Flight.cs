@@ -90,6 +90,33 @@ namespace LaunchCountdownSaver
             return along >= -3 && along <= CorridorKm && cross <= CorridorHalf(Math.Max(0, along));
         }
 
+        /// <summary>
+        /// Distance from a point to the nearest launch NOTAM airspace, in km: zero inside one. With no NOTAM
+        /// published yet it is the distance to the pad.
+        /// </summary>
+        public static double KmToNotam(Launch l, double lat, double lon, List<Area> areas)
+        {
+            double best = double.NaN, kx = 111.19 * Math.Cos(lat * D2R), ky = 111.19; var now = DateTime.UtcNow;
+            foreach (var a in areas)
+            {
+                if (a.Kind != "notam" || (a.To.HasValue && a.To.Value < now)) continue;
+                foreach (var ring in a.Rings)
+                {
+                    if (ring.Length == 0 || KmBetween(l.Lat, l.Lon, ring[0][0], ring[0][1]) > 1500) continue;
+                    if (InRing(lat, lon, ring)) return 0;
+                    for (int i = 0, j = ring.Length - 1; i < ring.Length; j = i++)
+                    {
+                        // nearest point on this edge, in kilometres east and north of the aircraft
+                        double ax = (ring[j][1] - lon) * kx, ay = (ring[j][0] - lat) * ky, bx = (ring[i][1] - lon) * kx, by = (ring[i][0] - lat) * ky;
+                        double dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy, t = len > 0 ? Math.Max(0, Math.Min(1, -(ax * dx + ay * dy) / len)) : 0;
+                        double d = Math.Sqrt((ax + dx * t) * (ax + dx * t) + (ay + dy * t) * (ay + dy * t));
+                        if (double.IsNaN(best) || d < best) best = d;
+                    }
+                }
+            }
+            return double.IsNaN(best) ? KmBetween(l.Lat, l.Lon, lat, lon) : best;
+        }
+
         public static bool InRing(double lat, double lon, double[][] ring)
         {
             bool inside = false;

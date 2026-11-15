@@ -11,7 +11,8 @@ It is not a web page in a window.
 
 Install
   1. Extract this whole folder somewhere permanent, for example
-     C:\Program Files\LaunchCountdown  (all the files must stay together).
+     Documents\LaunchCountdown  (all the files must stay together, and it
+     must be a folder you can write to, so it can update itself).
   2. Right-click LaunchCountdown.scr and choose "Install".
      Windows opens Screen Saver Settings with it selected; the small monitor
      there shows a live preview.
@@ -39,7 +40,8 @@ Keys
   A B N         aircraft / vessels / NOTAM and NOTMAR areas
   W             wind arrows and labels       G Y  telemetry / key
   M             cloud and wind fields for launch time or now
-  U             upper-wind source: automatic, radar profile, balloon, model
+  U             upper-wind source: automatic, live balloon, radar profile,
+                published sounding, model
   F1, K         show this list on screen
 
 Notes
@@ -56,12 +58,19 @@ Notes
   - The display still sleeps otherwise: outside the launch window it makes no
     power requests, the Windows display timer applies as usual, and its own
     timer (default 30 minutes) switches the monitor off too.
-  - Upper winds use measurements when T-0 is within six hours: the newest
-    weather balloon (Cape Canaveral, Vandenberg, Brownsville...) and the
-    nearest NEXRAD's radar wind profile, with the forecast model above them.
+  - Upper winds use measurements when T-0 is within six hours: balloons
+    tracked live by SondeHub as they climb, the newest published sounding
+    (Cape Canaveral, Vandenberg, Brownsville...) and the nearest NEXRAD's
+    radar wind profile, with the forecast model filling the gaps.
     The KSC TDRWP profiler has no public live feed.
   - A helicopter with a JOLLY callsign is drawn green and never raises an
     area alert: the rescue helicopters are allowed inside.
+  - Aircraft are shown only within 30 miles of the launch NOTAM airspace
+    (Settings > 3D corridor changes the distance; 0 shows everything).
+  - It updates itself: it checks the release every six hours and at start,
+    and a newer build takes effect the next time it starts. The folder must
+    be somewhere you can write to (not Program Files) for this to work.
+    Settings > Display turns it off.
   - Vessels need a free aisstream.io key, entered under Settings > Sources.
   - Windows may warn that the file comes from an unknown publisher; it is
     not code-signed.

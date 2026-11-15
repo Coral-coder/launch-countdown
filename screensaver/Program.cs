@@ -25,13 +25,13 @@ namespace LaunchCountdownSaver
         public const string DefaultStream = "https://video.ibm.com/embed/23615375?autoplay=true&volume=0";
 
         public static string Url = DefaultUrl, SiteIds = "12,27", Theme = "Mission Control", Slides = "", View = "Orbit", CloudTime = "t0", AisKey = "", Stream = DefaultStream, UpperSource = "auto";
-        public static int SecondsPerTab = 20, DisplayOffMinutes = 30, VerticalScale = 1;
-        public static bool WakeForLaunch = true, TerminalLayout = true, Video = true, Clouds = true, RadarVolume = true, Aircraft = true, Vessels = true,
+        public static int SecondsPerTab = 20, DisplayOffMinutes = 30, VerticalScale = 1, AircraftMiles = 30;
+        public static bool AutoUpdate = true, WakeForLaunch = true, TerminalLayout = true, Video = true, Clouds = true, RadarVolume = true, Aircraft = true, Vessels = true,
             Hazards = true, Wind = false, MapKey = true, Telemetry = true;
 
-        private static readonly string[] Bools = { "WakeForLaunch", "TerminalLayout", "Video", "Clouds", "RadarVolume", "Aircraft", "Vessels", "Hazards", "Wind", "MapKey", "Telemetry" };
+        private static readonly string[] Bools = { "AutoUpdate", "WakeForLaunch", "TerminalLayout", "Video", "Clouds", "RadarVolume", "Aircraft", "Vessels", "Hazards", "Wind", "MapKey", "Telemetry" };
         private static readonly string[] Strings = { "Url", "SiteIds", "Theme", "Slides", "View", "CloudTime", "AisKey", "Stream", "UpperSource" };
-        private static readonly string[] Ints = { "SecondsPerTab", "DisplayOffMinutes", "VerticalScale" };
+        private static readonly string[] Ints = { "SecondsPerTab", "DisplayOffMinutes", "VerticalScale", "AircraftMiles" };
 
         public static void Load()
         {
@@ -256,16 +256,22 @@ namespace LaunchCountdownSaver
             if (arg.StartsWith("/agent"))
             {
                 bool first;
-                using (new System.Threading.Mutex(true, AgentMutex, out first))
-                    if (first) Application.Run(new AgentContext());
+                var m = new System.Threading.Mutex(true, AgentMutex, out first);
+                if (!first)
+                {
+                    // the helper restarting itself after an update: give the old one a moment to leave
+                    m.Dispose(); System.Threading.Thread.Sleep(4000);
+                    m = new System.Threading.Mutex(true, AgentMutex, out first);
+                }
+                using (m) if (first) { Updater.Start(); Application.Run(new AgentContext()); }
             }
             else if (arg.StartsWith("/s"))
             {
                 bool first;
                 using (new System.Threading.Mutex(true, SaverMutex, out first))
-                    if (first) Application.Run(new SaverContext());
+                    if (first) { Updater.Start(); Application.Run(new SaverContext()); }
             }
-            else if (arg.StartsWith("/app")) { Store.Start(false); Application.Run(new SaverForm()); }
+            else if (arg.StartsWith("/app")) { Store.Start(false); Updater.Start(); Application.Run(new SaverForm()); }
             else if (arg.StartsWith("/p"))
             {
                 long h;
@@ -314,6 +320,8 @@ namespace LaunchCountdownSaver
         {
             Settings.Load();
             if (!Settings.WakeForLaunch) { tray.Visible = false; ExitThread(); return; }
+            // this helper runs for days: once an update is in place, hand over to the new copy
+            if (Updater.Updated) { tray.Visible = false; Program.Start("/agent"); ExitThread(); return; }
             var l = Store.Current; var net = l == null ? null : l.Net;
             tray.Text = net.HasValue ? "Launch Countdown · next T-0 " + net.Value.ToLocalTime().ToString("ddd HH:mm") : "Launch Countdown";
             if (!net.HasValue) return;

@@ -553,6 +553,8 @@ namespace LaunchCountdownSaver
             {
                 double age = unix - v.T;
                 if (v.Ground || age > (v.Sea ? 3600 : StaleMin * 60) || Flight.KmBetween(l.Lat, l.Lon, v.Lat, v.Lon) > TrafficKm) continue;
+                // aircraft are kept to those near the launch airspace, so the picture is not buried in airline traffic
+                if (!v.Sea && Settings.AircraftMiles > 0 && Flight.KmToNotam(l, v.Lat, v.Lon, Store.Areas) > Settings.AircraftMiles * 1.609344) continue;
                 double kmPerMin = v.Kt * 1.852 / 60, la, lo, x, z;
                 Flight.Destination(v.Lat, v.Lon, v.Track, kmPerMin * age / 60, out la, out lo);
                 double altFt = v.Sea ? 0 : Math.Max(0, v.AltFt + v.Fpm * age / 60), y = v.Sea ? 0.04 : altFt * 0.0003048 * vs;

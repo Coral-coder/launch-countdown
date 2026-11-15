@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Launch Countdown video</title>
+<style>html, body { margin: 0; height: 100%; background: #000; overflow: hidden; } iframe { border: 0; width: 100%; height: 100%; display: block; }</style>
+</head>
+<body>
+<script>
+// A bare page that holds one video player, for the Windows app's video panel. YouTube refuses to play
+// (error 153) when its player is opened directly with no embedding page, so the app opens this instead:
+//   player.html#<address of the player>
+// Only the players the countdown uses are allowed.
+const OK = ['www.youtube-nocookie.com', 'www.youtube.com', 'video.ibm.com'];
+function show() {
+  let url = null;
+  try { url = new URL(decodeURIComponent(location.hash.slice(1))); } catch { /* nothing to play */ }
+  document.body.querySelector('iframe')?.remove();
+  if (!url || url.protocol !== 'https:' || !OK.includes(url.hostname)) return;
+  const f = document.createElement('iframe');
+  f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+  f.referrerPolicy = 'strict-origin-when-cross-origin';
+  f.src = url.href;
+  document.body.append(f);
+}
+addEventListener('hashchange', show);
+show();
+</script>
+</body>
+</html>
