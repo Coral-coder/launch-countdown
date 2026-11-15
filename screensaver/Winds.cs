@@ -5,6 +5,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace LaunchCountdownSaver
 {
@@ -46,14 +48,22 @@ namespace LaunchCountdownSaver
             Func<Sounding, double, bool> good = (s, maxAge) => s != null && s.Levels.Count >= 3 && s.AgeMinutes <= maxAge && Flight.KmBetween(l.Lat, l.Lon, s.Lat, s.Lon) < 350;
             if (src == "profiler") { if (good(prof, 180)) obs = prof; else missing = "no current profiler data for this site"; }
             else if (src == "balloon") { if (good(ball, 36 * 60)) obs = ball; else missing = "no recent balloon for this site"; }
-            else if (src != "model" && near) obs = good(prof, 45) ? prof : good(ball, 12 * 60) ? ball : null;
+            else if (src != "model" && near && (good(prof, 45) || good(ball, 12 * 60)))
+            {
+                // everything measured: the balloon over the model, then the radar's fresher low-level winds over that
+                var lv = w.Profile(hNow); var parts = new List<string>();
+                if (good(ball, 12 * 60)) { lv = Merge(ball, lv); parts.Add(ball.Name + " " + ball.Station + " " + Age(ball)); }
+                if (good(prof, 45)) { lv = Merge(prof, lv); parts.Add(prof.Name + " " + prof.Station + " " + Age(prof)); }
+                label = string.Join(" + ", parts) + " · model above";
+                return lv;
+            }
 
             if (obs == null)
             {
                 label = (hT0 >= 0 ? "forecast model at T-0" : "forecast model now") + (missing != null ? " (" + missing + ")" : "");
                 return w.Profile(hT0 >= 0 ? hT0 : hNow);
             }
-            label = obs.Name + " " + obs.Station + " · " + Age(obs);
+            label = obs.Name + " " + obs.Station + " · " + Age(obs) + (obs.WindOnly ? " · model above" : "");
             return Merge(obs, w.Profile(hNow));
         }
 
@@ -99,13 +109,13 @@ namespace LaunchCountdownSaver
         public static volatile Sounding Balloon, Profiler;
         public static volatile string BalloonNote = "looking for a balloon sounding…", ProfilerNote = "looking for profiler data…";
 
-        // Upper-air stations near launch sites: id, name, latitude, longitude. The first three launch their own range balloons.
+        // Upper-air stations near launch sites: id, name, latitude, longitude, WMO number. The first three are the ranges' own.
         private static readonly object[][] BalloonSites =
         {
-            new object[] { "KXMR", "Cape Canaveral", 28.48, -80.55 }, new object[] { "KVBG", "Vandenberg", 34.75, -120.57 }, new object[] { "KWAL", "Wallops Island", 37.94, -75.47 },
-            new object[] { "KBRO", "Brownsville", 25.92, -97.42 }, new object[] { "KTBW", "Tampa Bay", 27.70, -82.40 }, new object[] { "KJAX", "Jacksonville", 30.48, -81.70 },
-            new object[] { "KMFL", "Miami", 25.75, -80.38 }, new object[] { "KEPZ", "El Paso (Santa Teresa)", 31.87, -106.70 }, new object[] { "KMAF", "Midland", 31.94, -102.19 },
-            new object[] { "KCRP", "Corpus Christi", 27.78, -97.51 }, new object[] { "KNKX", "San Diego (Miramar)", 32.85, -117.12 }, new object[] { "PADQ", "Kodiak", 57.75, -152.49 },
+            new object[] { "KXMR", "Cape Canaveral", 28.48, -80.55, 74794 }, new object[] { "KVBG", "Vandenberg", 34.75, -120.57, 72393 }, new object[] { "KWAL", "Wallops Island", 37.94, -75.47, 72402 },
+            new object[] { "KBRO", "Brownsville", 25.92, -97.42, 72250 }, new object[] { "KTBW", "Tampa Bay", 27.70, -82.40, 72210 }, new object[] { "KJAX", "Jacksonville", 30.48, -81.70, 72206 },
+            new object[] { "KMFL", "Miami", 25.75, -80.38, 72202 }, new object[] { "KEPZ", "El Paso (Santa Teresa)", 31.87, -106.70, 72364 }, new object[] { "KMAF", "Midland", 31.94, -102.19, 72265 },
+            new object[] { "KCRP", "Corpus Christi", 27.78, -97.51, 72251 }, new object[] { "KNKX", "San Diego (Miramar)", 32.85, -117.12, 72293 }, new object[] { "PADQ", "Kodiak", 57.75, -152.49, 70350 },
         };
 
         private static void LoadBalloon()
@@ -114,42 +124,92 @@ namespace LaunchCountdownSaver
             var near = BalloonSites.Where(s => Flight.KmBetween(c.Lat, c.Lon, (double)s[2], (double)s[3]) < 350).OrderBy(s => Flight.KmBetween(c.Lat, c.Lon, (double)s[2], (double)s[3])).ToList();
             if (near.Count == 0) { Balloon = null; BalloonNote = "no upper-air station near this site"; return; }
             Sounding best = null;
-            // balloons go up at 00Z and 12Z, and the ranges fly extra ones on launch days: look back hour by hour at the nearest station first
             foreach (var st in near)
             {
-                var s = NewestBalloon((string)st[0], (string)st[1], (double)st[2], (double)st[3]);
+                var s = NewestBalloon((string)st[0], (string)st[1], (double)st[2], (double)st[3], (int)st[4]);
                 if (s != null && (best == null || s.At > best.At.AddHours(3))) best = s; // a farther station only wins by being clearly newer
                 if (best != null && best.AgeMinutes < 13 * 60) break;
             }
             Balloon = best; BalloonNote = best == null ? "no balloon in the last 36 hours" : "";
         }
 
-        /// <summary>The newest sounding Iowa State's archive has for a station, trying the last few 12-hourly launches.</summary>
-        private static Sounding NewestBalloon(string id, string name, double lat, double lon)
+        /// <summary>
+        /// The newest sounding for a station, trying the last few 12-hourly launches. The University of Wyoming
+        /// has the range balloons soonest but is often busy; Iowa State's archive is the fallback.
+        /// </summary>
+        private static Sounding NewestBalloon(string id, string name, double lat, double lon, int wmo)
         {
             var t = DateTime.UtcNow; t = new DateTime(t.Year, t.Month, t.Day, t.Hour >= 12 ? 12 : 0, 0, 0, DateTimeKind.Utc);
             for (int back = 0; back < 4; back++, t = t.AddHours(-12))
             {
-                J d;
-                try { d = J.Parse(Get("https://mesonet.agron.iastate.edu/json/raob.py?ts=" + t.ToString("yyyyMMddHHmm") + "&station=" + id)); } catch { continue; }
-                var p = d["profiles"][0];
-                if (p["profile"].Count < 5) continue;
-                var s = new Sounding { Kind = "balloon", Station = id, Name = "balloon " + name, At = p["valid"].Time ?? t, Lat = lat, Lon = lon };
-                foreach (var x in p["profile"].Items)
+                var s = new Sounding { Kind = "balloon", Station = id, Name = "balloon", At = t, Lat = lat, Lon = lon };
+                for (int attempt = 0; attempt < 3 && s.Levels.Count == 0; attempt++)
                 {
-                    double z = x["hght"].N(double.NaN), kt = x["sknt"].N(double.NaN), tc = x["tmpc"].N(double.NaN), td = x["dwpc"].N(double.NaN);
-                    if (double.IsNaN(z)) continue;
-                    double rh = double.IsNaN(tc) || double.IsNaN(td) ? double.NaN : 100 * Math.Exp(17.62 * td / (243.12 + td) - 17.62 * tc / (243.12 + tc));
-                    s.Levels.Add(new Level { P = x["pres"].N(double.NaN), Z = z, T = tc, Kt = kt, Dir = x["drct"].N(double.NaN), Rh = rh });
+                    try
+                    {
+                        var csv = Get("https://weather.uwyo.edu/wsgi/sounding?datetime=" + t.ToString("yyyy-MM-dd") + "%20" + t.ToString("HH") + ":00:00&id=" + wmo + "&src=UNKNOWN&type=TEXT:CSV");
+                        foreach (var row in csv.Split('\n').Skip(1))
+                        {
+                            // time, lon, lat, pressure hPa, height m, temperature, dew point, ice point, RH %, RH ice, mixing ratio, direction, speed m/s
+                            var f = row.Split(','); if (f.Length < 13) continue;
+                            Func<int, double> n = i => { double v; return double.TryParse(f[i].Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v) ? v : double.NaN; };
+                            if (double.IsNaN(n(4))) continue;
+                            s.Levels.Add(new Level { P = n(3), Z = n(4), T = n(5), Rh = n(8), Dir = n(11), Kt = n(12) * 1.94384 });
+                        }
+                    }
+                    catch (System.Net.WebException e)
+                    {
+                        var r = e.Response as System.Net.HttpWebResponse;
+                        if (r != null && (int)r.StatusCode == 404) break; // no such sounding
+                        Thread.Sleep(2500);                               // "server too busy": try again
+                    }
                 }
                 if (s.Levels.Count(x => !double.IsNaN(x.Kt)) >= 5) return s;
+                try
+                {
+                    var p = J.Parse(Get("https://mesonet.agron.iastate.edu/json/raob.py?ts=" + t.ToString("yyyyMMddHHmm") + "&station=" + id))["profiles"][0];
+                    s.Levels.Clear(); s.At = p["valid"].Time ?? t;
+                    foreach (var x in p["profile"].Items)
+                    {
+                        double z = x["hght"].N(double.NaN), tc = x["tmpc"].N(double.NaN), td = x["dwpc"].N(double.NaN);
+                        if (double.IsNaN(z)) continue;
+                        double rh = double.IsNaN(tc) || double.IsNaN(td) ? double.NaN : 100 * Math.Exp(17.62 * td / (243.12 + td) - 17.62 * tc / (243.12 + tc));
+                        s.Levels.Add(new Level { P = x["pres"].N(double.NaN), Z = z, T = tc, Kt = x["sknt"].N(double.NaN), Dir = x["drct"].N(double.NaN), Rh = rh });
+                    }
+                    if (s.Levels.Count(x => !double.IsNaN(x.Kt)) >= 5) return s;
+                }
+                catch { }
             }
             return null;
         }
 
+        /// <summary>
+        /// The radar wind profile: the nearest NEXRAD's velocity-azimuth display product, a column of measured
+        /// winds over the radar about every five minutes. It reaches as high as there is something in the air
+        /// to reflect from: a few kilometres on a clear day, the whole troposphere in cloud or rain.
+        /// The KSC profiler (TDRWP) itself has no public live feed.
+        /// </summary>
         private static void LoadProfiler()
         {
-            Profiler = null; ProfilerNote = "no profiler feed connected yet";
+            var c = Current; if (c == null || !c.HasPad) return;
+            var near = Radars.OrderBy(r => Flight.KmBetween(c.Lat, c.Lon, (double)r[1], (double)r[2])).First();
+            if (Flight.KmBetween(c.Lat, c.Lon, (double)near[1], (double)near[2]) > 230) { Profiler = null; ProfilerNote = "no NEXRAD radar near this site"; return; }
+            string id = (string)near[0];
+            var raw = Bytes("https://tgftp.nws.noaa.gov/SL.us008001/DF.of/DC.radar/DS.48vwp/SI." + id.ToLowerInvariant() + "/sn.last");
+            var text = System.Text.Encoding.GetEncoding(28591).GetString(raw); // the table is plain text inside a binary product
+            var head = Regex.Match(text, @"VAD Algorithm Output\s+(\d\d)/(\d\d)/(\d\d)\s+(\d\d):(\d\d)");
+            if (!head.Success) throw new Exception("no wind table in the radar product");
+            Func<int, int> g = i => int.Parse(head.Groups[i].Value);
+            var s = new Sounding { Kind = "profiler", Station = id, Name = "radar wind profile", WindOnly = true, Lat = (double)near[1], Lon = (double)near[2], At = new DateTime(2000 + g(3), g(1), g(2), g(4), g(5), 0, DateTimeKind.Utc) };
+            // ALT (hundreds of feet)  U  V  W  DIR  SPD (knots)  RMS ...
+            foreach (Match m in Regex.Matches(text, @"(\d{3})\s+(-?\d+\.\d)\s+(-?\d+\.\d)\s+(?:NA|-?\d+\.\d)\s+(\d{3})\s+(\d{3})\s+(\d+\.\d)"))
+            {
+                double z = int.Parse(m.Groups[1].Value) * 100 * 0.3048;
+                if (s.Levels.Any(x => Math.Abs(x.Z - z) < 1)) continue;
+                s.Levels.Add(new Level { Z = z, Dir = int.Parse(m.Groups[4].Value), Kt = int.Parse(m.Groups[5].Value), P = double.NaN, T = double.NaN, Rh = double.NaN });
+            }
+            if (s.Levels.Count < 3) { Profiler = null; ProfilerNote = "radar wind profile " + id + " has too few levels right now"; return; }
+            Profiler = s; ProfilerNote = "";
         }
     }
 }

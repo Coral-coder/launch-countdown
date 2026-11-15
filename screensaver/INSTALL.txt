@@ -1,4 +1,10 @@
-Launch Countdown screensaver for Windows 10 / 11 (64-bit)
+Launch Countdown for Windows 10 / 11 (64-bit)
+
+Two ways to run the same program:
+  LaunchCountdown.exe   the app: a normal window with every tab. It stays on
+                        the tab you click; switch whenever you like. F11 for
+                        full screen.
+  LaunchCountdown.scr   the screensaver (install it as below).
 
 A native screensaver: it fetches its own data and draws everything itself.
 It is not a web page in a window.
@@ -12,8 +18,14 @@ Install
   3. "Settings..." opens its own settings: theme, launch sites, which slides
      to show and for how long, the 3D layers, display-off time, launch wake-up.
 
-Keys while it runs (the mouse is ignored)
-  Esc, Space    exit
+Mouse
+  Moving the mouse never exits the screensaver. It brings up the tab bar and
+  buttons (Hold, Scrub, Set T-0, Reset, Slideshow, Settings); click a tab to
+  stay on it. In the 3D view, drag to turn, wheel to zoom, double-click to
+  let it drift again.
+
+Keys
+  Esc, Space    exit the screensaver (in the app: leave full screen / slideshow)
   H             hold / resume (T-0 moves later by the length of the hold)
   Shift+S       scrub
   T             enter a new T-0 (kept until the source publishes a new time)
@@ -27,6 +39,7 @@ Keys while it runs (the mouse is ignored)
   A B N         aircraft / vessels / NOTAM and NOTMAR areas
   W             wind arrows and labels       G Y  telemetry / key
   M             cloud and wind fields for launch time or now
+  U             upper-wind source: automatic, radar profile, balloon, model
   F1, K         show this list on screen
 
 Notes
@@ -43,6 +56,12 @@ Notes
   - The display still sleeps otherwise: outside the launch window it makes no
     power requests, the Windows display timer applies as usual, and its own
     timer (default 30 minutes) switches the monitor off too.
+  - Upper winds use measurements when T-0 is within six hours: the newest
+    weather balloon (Cape Canaveral, Vandenberg, Brownsville...) and the
+    nearest NEXRAD's radar wind profile, with the forecast model above them.
+    The KSC TDRWP profiler has no public live feed.
+  - A helicopter with a JOLLY callsign is drawn green and never raises an
+    area alert: the rescue helicopters are allowed inside.
   - Vessels need a free aisstream.io key, entered under Settings > Sources.
   - Windows may warn that the file comes from an unknown publisher; it is
     not code-signed.

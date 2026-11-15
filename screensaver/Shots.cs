@@ -35,6 +35,8 @@ namespace LaunchCountdownSaver
                     new Plane { Id = "s1", Name = "TEST CARGO", Sea = true, ShipType = 70, Lat = l.Lat + 0.12, Lon = l.Lon + 0.25, Kt = 14, Track = 200, T = t },
                     new Plane { Id = "s2", Name = "TEST SAIL", Sea = true, ShipType = 36, Lat = l.Lat - 0.05, Lon = l.Lon + 0.15, Kt = 6, Track = 40, T = t } };
             }
+            bool bar = Environment.GetEnvironmentVariable("BAR") == "1"; var tabs = Settings.SlideList(true); tabs.Add(Slide.Terminal);
+            { string src; var lv = Winds.For(l, out src); Console.WriteLine("winds: " + src + " · " + lv.Count + " levels · balloon " + (Store.Balloon == null ? Store.BalloonNote : Store.Balloon.Station + " " + Store.Balloon.At.ToString("dd HH:mm") + " " + Store.Balloon.Levels.Count) + " · profiler " + (Store.Profiler == null ? Store.ProfilerNote : Store.Profiler.Station + " " + Store.Profiler.At.ToString("HH:mm") + " " + Store.Profiler.Levels.Count)); }
             var scene = new Scene3D();
             Bitmap view = null;
             foreach (var name in a[1].Split(','))
@@ -53,7 +55,7 @@ namespace LaunchCountdownSaver
                     using (var g = Graphics.FromImage(b))
                     {
                         Layout lay;
-                        using (var p = new Painter(g, w, h) { Scene = scene, VideoAvailable = true }) { p.Draw(slide, 0, 6); p.Banner(l, false, null, name == "help"); lay = p.Out; }
+                        using (var p = new Painter(g, w, h) { Scene = scene, VideoAvailable = true, Bar = bar, App = bar, Tabs = tabs }) { p.Draw(slide, 0, 6); p.Banner(l, false, null, name == "help"); lay = p.Out; }
                         Painter.DrawClock(g, lay, h / 1080f, DateTime.UtcNow);
                         if (lay.View3D.Width > 4)
                         {
@@ -63,7 +65,7 @@ namespace LaunchCountdownSaver
                             view = OffScreen.Render(scene, r.Width, r.Height, 3);
                             g.DrawImageUnscaled(view, r.X, r.Y);
                             // the numbers beside the view come from the scene, so draw the slide again now that it has run
-                            using (var p = new Painter(g, w, h) { Scene = scene, VideoAvailable = true }) { p.Draw(slide, 0, 6); lay = p.Out; }
+                            using (var p = new Painter(g, w, h) { Scene = scene, VideoAvailable = true, Bar = bar, App = bar, Tabs = tabs }) { p.Draw(slide, 0, 6); lay = p.Out; }
                             Painter.DrawClock(g, lay, h / 1080f, DateTime.UtcNow);
                             g.DrawImageUnscaled(view, r.X, r.Y);
                         }

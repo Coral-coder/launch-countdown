@@ -117,6 +117,15 @@ namespace LaunchCountdownSaver
             return 82 * u;
         }
 
+        /// <summary>Balloons report hundreds of levels: keep about n of them, evenly spread in height, for a table.</summary>
+        private static List<Level> Thin(List<Level> lv, int n)
+        {
+            if (lv.Count <= n) return lv;
+            var o = new List<Level>(); double z0 = lv[0].Z, z1 = Math.Min(lv[lv.Count - 1].Z, 20000), next = z0;
+            foreach (var q in lv) if (q.Z >= next && q.Z <= z1 + 1) { o.Add(q); next = q.Z + (z1 - z0) / n; }
+            return o;
+        }
+
         private void Line(Color c, float width, float x1, float y1, float x2, float y2) { using (var p = new Pen(c, Math.Max(1, width * u))) g.DrawLine(p, x1, y1, x2, y2); }
 
         // ---------------------------------------------------------------- shared words
@@ -439,8 +448,8 @@ namespace LaunchCountdownSaver
             double t = l.Net.HasValue ? (now - l.Net.Value).TotalSeconds : double.NaN;
             bool flying = t >= 0 && t <= Flight.End;
             var w = Store.Weather; int hr = w == null ? -1 : (l.Net.HasValue && w.Hour(l.Net.Value) >= 0 ? w.Hour(l.Net.Value) : w.Hour(now));
-            var prof = w == null ? null : w.Profile(hr);
-            string src = prof != null && prof.Count > 1 ? (l.Net.HasValue && w.Hour(l.Net.Value) >= 0 ? "forecast sounding at T-0" : "current forecast sounding") : null;
+            string src; var prof = Winds.For(l, out src);
+            if (prof.Count < 2) { prof = null; src = null; }
             double at = flying ? t : 72; // before liftoff, show what the profile predicts at maximum dynamic pressure
             var s = Flight.At(at, l, prof, src);
             float y = c.Y, lh = Math.Min(30 * u, c.Height / 23.5f);
@@ -601,7 +610,7 @@ namespace LaunchCountdownSaver
             var k = Card(new RectangleF(r.X, r.Y + r.Height * 0.54f + gap, colW, r.Height * 0.46f - gap), "Launch weather watch · indicative only");
             if (hr >= 0)
             {
-                var prof = w.Profile(hr); double jet = prof.Where(p => p.P <= 300 && p.P >= 150 && !double.IsNaN(p.Kt)).Select(p => p.Kt).DefaultIfEmpty(double.NaN).Max();
+                string windSrc; var prof = Winds.For(l, out windSrc); double jet = prof.Where(p => p.P <= 300 && p.P >= 150 && !double.IsNaN(p.Kt)).Select(p => p.Kt).DefaultIfEmpty(double.NaN).Max();
                 Func<double, double, double, int> lv = (v, watch, stop) => double.IsNaN(v) ? 0 : v >= stop ? 2 : v >= watch ? 1 : 0;
                 var checks = new[]
                 {
@@ -631,10 +640,11 @@ namespace LaunchCountdownSaver
             Chart(new RectangleF(chX, r.Y + 2 * (chH + gap), chW, chH), "Rain chance · %   and   CAPE · J/kg ÷ 30", w.Time, t0, new[] { w.Pop, w.Cape.Select(v => v / 30).ToArray() }, new[] { th.Info, th.Bad }, new[] { "rain", "CAPE" }, 100);
 
             // upper winds
-            var up = Card(new RectangleF(r.Right - upperW, r.Y, upperW, r.Height), "Winds aloft · " + (hT0 >= 0 ? "at T-0" : "now"));
-            var lv2 = w.Profile(hr);
+            var up = Card(new RectangleF(r.Right - upperW, r.Y, upperW, r.Height), "Winds aloft");
+            string aloftSrc; var lv2 = Winds.For(l, out aloftSrc);
             if (lv2.Count > 0)
             {
+                if (lv2.Count > 22) lv2 = Thin(lv2, 22);
                 float y = up.Y, lh = Math.Min(44 * u, (up.Height - 30 * u) / (lv2.Count + 1));
                 float[] cols = { 0, 0.2f, 0.42f, 0.62f, 0.82f }; string[] headings = { "hPa", "height", "wind", "from", "temp" };
                 for (int i = 0; i < 5; i++) Text(Up(headings[i]), up.X + cols[i] * up.Width, y, 12, th.Muted, true);
@@ -651,7 +661,7 @@ namespace LaunchCountdownSaver
                     Text(Num(p.T) + " °C", up.X + cols[4] * up.Width, y, 16, th.Ink2, false, true);
                     y += lh;
                 }
-                Text("Open-Meteo forecast model, pressure levels", up.X, up.Bottom - 16 * u, 11, th.Muted);
+                Text(aloftSrc, up.X, up.Bottom - 16 * u, 11, th.Muted, false, false, -1, up.Width);
             }
         }
 

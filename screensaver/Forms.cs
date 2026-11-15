@@ -476,6 +476,12 @@ namespace LaunchCountdownSaver
             var ais = new TextBox { Left = 14, Top = 96, Width = 540, Text = Settings.AisKey }; so.Controls.Add(ais);
             label(so, "Countdown site (published launch azimuths and hazard areas come from here)", 14, 136);
             var url = new TextBox { Left = 14, Top = 156, Width = 540, Text = Settings.Url }; so.Controls.Add(url);
+            label(so, "Upper-level winds, for the displays and the calculations", 14, 270);
+            var upper = new ComboBox { Left = 14, Top = 290, Width = 540, DropDownStyle = ComboBoxStyle.DropDownList };
+            var upperIds = new[] { "auto", "profiler", "balloon", "model" };
+            upper.Items.AddRange(new object[] { "Automatic: newest measurement when T-0 is within 6 hours, forecast otherwise", "Radar wind profile (NEXRAD VAD, about every 5 minutes, low levels)", "Weather balloon (radiosonde, newest launch)", "Forecast model" });
+            upper.SelectedIndex = Math.Max(0, Array.IndexOf(upperIds, Settings.UpperSource)); so.Controls.Add(upper);
+            note(so, "The KSC TDRWP profiler has no public live feed, so the radar wind profile from the nearest NEXRAD stands in for it.", 14, 320, 40);
             note(so, "Everything else is fetched directly by the screensaver: launches from Launch Library 2, weather from Open-Meteo and the National Weather Service, radar from NOAA, aircraft from adsb.lol, tides from NOAA CO-OPS, space weather from NOAA SWPC.", 14, 196, 60);
 
             var ok = new Button { Text = "OK", Left = 414, Top = 478, Width = 84, Height = 28 };
@@ -497,7 +503,7 @@ namespace LaunchCountdownSaver
                 Settings.Wind = wind.Checked; Settings.MapKey = key.Checked; Settings.Telemetry = tele.Checked; Settings.View = (string)view.SelectedItem;
                 Settings.VerticalScale = int.Parse(((string)scale.SelectedItem).TrimEnd('×')); Settings.CloudTime = when.SelectedIndex == 1 ? "now" : "t0";
                 Settings.Stream = string.IsNullOrWhiteSpace(stream.Text) ? Settings.DefaultStream : stream.Text.Trim(); Settings.AisKey = ais.Text.Trim();
-                Settings.Url = string.IsNullOrWhiteSpace(url.Text) ? Settings.DefaultUrl : url.Text.Trim();
+                Settings.Url = string.IsNullOrWhiteSpace(url.Text) ? Settings.DefaultUrl : url.Text.Trim(); Settings.UpperSource = upperIds[upper.SelectedIndex];
                 Settings.Save();
                 if (Settings.WakeForLaunch && !Program.IsRunning(Program.AgentMutex)) Program.Start("/agent");
                 Close();

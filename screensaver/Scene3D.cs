@@ -264,14 +264,15 @@ namespace LaunchCountdownSaver
         private void Wind(Theme th)
         {
             var w = Store.Weather; if (w == null || w.Lat != l.Lat) return;
-            int hr = Settings.CloudTime != "now" && l.Net.HasValue && w.Hour(l.Net.Value) >= 0 ? w.Hour(l.Net.Value) : w.Hour(DateTime.UtcNow);
-            var c = Color.FromArgb(127, 178, 245);
+            var c = Color.FromArgb(127, 178, 245); string src;
+            var levels = Winds.For(l, out src); double lastY = -9;
             // a column beside the pad, clear of the corridor
             double ox = Math.Sin((l.Heading - 90) * D2R) * 14, oz = -Math.Cos((l.Heading - 90) * D2R) * 14;
             GL.glLineWidth(2); GL.Color(c, 0.9);
-            foreach (var p in w.Profile(hr))
+            foreach (var p in levels)
             {
-                if (double.IsNaN(p.Kt) || p.Z > 17000) continue;
+                if (double.IsNaN(p.Kt) || p.Z > 17000 || p.Z / 1000 * vs - lastY < 0.9 * vs) continue; // about one arrow a kilometre
+                lastY = p.Z / 1000 * vs;
                 double y = p.Z / 1000 * vs, len = 1.5 + p.Kt * 0.12, dx = -Math.Sin(p.Dir * D2R), dz = Math.Cos(p.Dir * D2R); // downwind
                 double x2 = ox + dx * len, z2 = oz + dz * len, hx = -dz, hz = dx;
                 GL.glBegin(GL.LINES);

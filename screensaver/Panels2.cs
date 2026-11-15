@@ -48,7 +48,7 @@ namespace LaunchCountdownSaver
             if (w == null || w.Lat != l.Lat) { Waiting(r, "Launch commit criteria", "weather loading…"); return; }
             int hT0 = l.Net.HasValue ? w.Hour(l.Net.Value) : -1, hr = hT0 >= 0 ? hT0 : w.Hour(now);
             if (hr < 0) { Waiting(r, "Launch commit criteria", "no forecast for this time"); return; }
-            var prof = w.Profile(hr);
+            string windSrc; var prof = Winds.For(l, out windSrc);
             double jet = prof.Where(p => p.P <= 300 && p.P >= 150 && !double.IsNaN(p.Kt)).Select(p => p.Kt).DefaultIfEmpty(double.NaN).Max();
             double shear = 0; // strongest change of wind between neighbouring levels, per kilometre
             for (int i = 1; i < prof.Count; i++)
@@ -67,7 +67,7 @@ namespace LaunchCountdownSaver
             {
                 new Rule { Name = "Surface wind", Value = Num(w.Wind[hr]) + " kt from " + Num(w.Dir[hr], "000") + "°", Limit = "watch 22 kt · no-go 30 kt", Level = lv(w.Wind[hr], 22, 30) },
                 new Rule { Name = "Surface gusts", Value = Num(w.Gust[hr]) + " kt", Limit = "watch 28 kt · no-go 35 kt", Level = lv(w.Gust[hr], 28, 35) },
-                new Rule { Name = "Upper-level wind (300–150 hPa)", Value = Num(jet) + " kt", Limit = "watch 100 kt · no-go 130 kt", Level = lv(jet, 100, 130) },
+                new Rule { Name = "Upper-level wind (300–150 hPa)", Value = Num(jet) + " kt · " + windSrc, Limit = "watch 100 kt · no-go 130 kt", Level = lv(jet, 100, 130) },
                 new Rule { Name = "Wind shear aloft", Value = Num(shear, "0.0") + " kt per km", Limit = "watch 15 · no-go 25 kt per km", Level = lv(shear, 15, 25) },
                 new Rule { Name = "Precipitation at the pad", Value = Num(w.Pop[hr]) + "% chance · " + Num(w.Rain[hr], "0.0") + " mm/h", Limit = "watch 40% or 0.1 mm · no-go 0.5 mm/h", Level = Math.Max(lv(w.Rain[hr], 0.1, 0.5), lv(w.Pop[hr], 40, 101)) },
                 new Rule { Name = "Lightning potential (CAPE)", Value = Num(w.Cape[hr]) + " J/kg", Limit = "watch 1000 · no-go 2000 J/kg", Level = lv(w.Cape[hr], 1000, 2000) },
@@ -167,13 +167,14 @@ namespace LaunchCountdownSaver
         {
             var w = Store.Weather;
             if (w == null || w.Lat != l.Lat) { Waiting(r, "Upper air", "weather loading…"); return; }
-            int hT0 = l.Net.HasValue ? w.Hour(l.Net.Value) : -1, hr = hT0 >= 0 ? hT0 : w.Hour(now); var lv = w.Profile(hr);
+            int hT0 = l.Net.HasValue ? w.Hour(l.Net.Value) : -1, hr = hT0 >= 0 ? hT0 : w.Hour(now); string src; var lv = Winds.For(l, out src);
             if (lv.Count < 3) { Waiting(r, "Upper air", "no sounding for this time"); return; }
-            string when = hT0 >= 0 ? "at T-0" : "now";
+            lv = lv.Where(q => q.P >= 95).ToList(); // the charts stop at 100 hPa
+            string when = "· " + src;
             float gap = 16 * u, sw = r.Width * 0.42f, hw = r.Width * 0.27f;
 
             // skew-T log-P
-            var c = Card(new RectangleF(r.X, r.Y, sw, r.Height), "Sounding (skew-T) · forecast model " + when);
+            var c = Card(new RectangleF(r.X, r.Y, sw, r.Height), "Sounding (skew-T) " + when);
             var p = new RectangleF(c.X + 50 * u, c.Y + 6 * u, c.Width - 60 * u, c.Height - 40 * u);
             const double pTop = 100, pBot = 1050, tMin = -40, tMax = 40;
             Func<double, float> py = pr => p.Y + (float)(Math.Log(pr / pTop) / Math.Log(pBot / pTop)) * p.Height;
@@ -191,7 +192,7 @@ namespace LaunchCountdownSaver
             for (int t = -40; t <= 40; t += 20) Text(t + "°C", px(t, pBot), p.Bottom + 6 * u, 12, th.Muted, false, true, 0);
             Text("temperature", p.Right, p.Y + 4 * u, 13, th.Bad, true, false, 1); Text("dew point", p.Right, p.Y + 24 * u, 13, th.Good, true, false, 1);
             // wind barbs down the right-hand side, as arrows
-            foreach (var q in lv)
+            foreach (var q in Thin(lv, 26))
             {
                 if (double.IsNaN(q.Kt)) continue;
                 float y = py(q.P), x = p.Right - 150 * u, len = (float)Math.Min(60, 14 + q.Kt * 0.5) * u;
@@ -216,17 +217,26 @@ namespace LaunchCountdownSaver
             Text("surface–3 km", h.X, h.Bottom - 14 * u, 12, th.Good, true); Text("3–9 km", h.X + 110 * u, h.Bottom - 14 * u, 12, th.Warn, true); Text("above 9 km", h.X + 180 * u, h.Bottom - 14 * u, 12, th.Bad, true);
 
             // stability numbers
-            var s = Card(new RectangleF(r.X + sw + gap, r.Y + r.Height * 0.56f + gap, hw, r.Height * 0.44f - gap), "Indices " + when);
+            var s = Card(new RectangleF(r.X + sw + gap, r.Y + r.Height * 0.56f + gap, hw, r.Height * 0.44f - gap), "Indices and sources · U changes the source");
             double freezing = double.NaN, trop = lv.OrderBy(q => q.T).First().Z;
             for (int i = 1; i < lv.Count; i++) if (lv[i - 1].T > 0 && lv[i].T <= 0) { freezing = lv[i - 1].Z + (lv[i].Z - lv[i - 1].Z) * lv[i - 1].T / (lv[i - 1].T - lv[i].T); break; }
             var jet = lv.Where(q => !double.IsNaN(q.Kt)).OrderByDescending(q => q.Kt).First();
             float half = s.Width / 2, sy = s.Y;
             Fact(s.X, sy, half, "CAPE", Num(w.Cape[hr]) + " J/kg"); Fact(s.X + half, sy, half, "Freezing level", double.IsNaN(freezing) ? "—" : (freezing / 1000).ToString("0.0") + " km", double.IsNaN(freezing) ? null : (freezing * 3.28084).ToString("#,0") + " ft"); sy += 92 * u;
             Fact(s.X, sy, half, "Strongest wind", Num(jet.Kt) + " kt", "at " + (jet.Z / 1000).ToString("0.0") + " km, " + jet.P.ToString("0") + " hPa");
-            Fact(s.X + half, sy, half, "Coldest level", (trop / 1000).ToString("0.0") + " km", Num(lv.Min(q => q.T)) + " °C");
+            Fact(s.X + half, sy, half, "Coldest level", (trop / 1000).ToString("0.0") + " km", Num(lv.Min(q => q.T)) + " °C"); sy += 96 * u;
+            // what each source has right now, and which one is in use
+            var bal = Store.Balloon; var pro = Store.Profiler;
+            Action<string, string, bool> line = (k, v, ok) => { Text(Up(k), s.X, sy + 2 * u, 12, th.Muted, true); Text(v, s.X + 150 * u, sy, 14, ok ? th.Ink : th.Muted, false, false, -1, s.Width - 150 * u); sy += 24 * u; };
+            line("In use", Settings.UpperSource == "auto" ? "automatic: measurements near launch" : Winds.SourceName(Settings.UpperSource), true);
+            line("Balloon", bal != null ? bal.Station + " " + bal.At.ToString("ddd HH:mm") + " UTC · to " + (bal.Levels.Max(q => q.Z) / 1000).ToString("0") + " km" : Store.BalloonNote, bal != null);
+            line("Radar profile", pro != null ? pro.Station + " " + pro.At.ToString("HH:mm") + " UTC · to " + (pro.Levels.Max(q => q.Z) / 1000).ToString("0.0") + " km" : Store.ProfilerNote, pro != null);
+            line("TDRWP", "no public live feed (NASA's archive runs months behind)", false);
+            line("Model", "Open-Meteo, hourly, to 16 km", true);
 
             // table
-            var tb = Card(new RectangleF(r.X + sw + hw + 2 * gap, r.Y, r.Width - sw - hw - 2 * gap, r.Height), "Levels " + when);
+            var tb = Card(new RectangleF(r.X + sw + hw + 2 * gap, r.Y, r.Width - sw - hw - 2 * gap, r.Height), "Levels");
+            var full = lv; lv = Thin(lv, 20);
             float ty = tb.Y, lh = Math.Min(48 * u, (tb.Height - 30 * u) / (lv.Count + 1));
             float[] cols = { 0, 0.16f, 0.36f, 0.56f, 0.76f, 0.9f }; string[] heads = { "hPa", "height", "wind", "from", "temp", "RH" };
             for (int i = 0; i < heads.Length; i++) Text(Up(heads[i]), tb.X + cols[i] * tb.Width, ty, 12, th.Muted, true);
