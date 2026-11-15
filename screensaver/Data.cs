@@ -228,7 +228,7 @@ namespace LaunchCountdownSaver
             {
                 new Job { Run = LoadLaunches, Every = 600 }, new Job { Run = LoadHeadings, Every = 1800 }, new Job { Run = LoadWeather, Every = 600 },
                 new Job { Run = LoadClouds, Every = 1800 }, new Job { Run = LoadMap, Every = 86400 }, new Job { Run = LoadRadar, Every = 300 }, new Job { Run = LoadAreas, Every = 600 },
-                new Job { Run = LoadNws, Every = 900 }, new Job { Run = LoadSea, Every = 1800 }, new Job { Run = LoadSpace, Every = 900 }, new Job { Run = LoadVolume, Every = 150 },
+                new Job { Run = LoadNws, Every = 900 }, new Job { Run = LoadSea, Every = 1800 }, new Job { Run = LoadSpace, Every = 900 }, new Job { Run = LoadVolume, Every = 150 }, new Job { Run = LoadBalloon, Every = 1200 }, new Job { Run = LoadProfiler, Every = 300 },
             };
             if (light) jobs = new[] { new Job { Run = LoadLaunches, Every = 900 } };
             while (true)

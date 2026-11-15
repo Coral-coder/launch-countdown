@@ -113,6 +113,15 @@ namespace LaunchCountdownSaver
             return "light";
         }
 
+        /// <summary>
+        /// "Jolly" is the callsign of the Air Force rescue helicopters that support launches from inside the
+        /// closed areas. They are allowed there, so they are drawn green and never raise an alert.
+        /// </summary>
+        public static bool IsJolly(Plane v)
+        {
+            return !v.Sea && (v.Name ?? "").TrimStart().StartsWith("JOLLY", StringComparison.OrdinalIgnoreCase) && AircraftKind(v) == "heli";
+        }
+
         /// <summary>boat, cargo, tanker, liner or sail, from the AIS ship type when one was heard.</summary>
         public static string VesselKind(Plane v)
         {

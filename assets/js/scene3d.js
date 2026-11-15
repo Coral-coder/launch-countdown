@@ -474,6 +474,8 @@ function vesselKind(v) {
 }
 
 /** Model and relative size for an aircraft: ADS-B emitter category first, then type code, then how it is flying. */
+// "Jolly" is the callsign of the Air Force rescue helicopters that support launches from inside the closed areas.
+const JOLLY = 0x3cdc5a, isJolly = (v) => /^JOLLY/i.test((v.name || '').trim()) && aircraftKind(v)[0] === 'heli';
 function aircraftKind(v) {
   const t = (v.type || '').toUpperCase(), cat = v.cat || '';
   if (cat === 'A7' || /^(H\d|EC\d|AS\d|B06|B40[79]|B41|B42|B43|R22|R44|R66|S6[14]|S7[06]|S92|UH|AH|CH|MH|MD[569]|A109|A119|A139|A169|AW|BK17|B505|EN[24]8)/.test(t)) return ['heli', 0.85];
@@ -551,7 +553,7 @@ function buildTraffic() {
     const { lat, lon } = launch.pad;
     if (v.lat == null || kmBetween(lat, lon, v.lat, v.lon) > TRAFFIC_KM) return;
     if (!sea && (v.ground || (now() / 1000 - v.t) / 60 > STALE_MIN)) return;
-    const color = sea ? SEA : AIR;
+    const jolly = !sea && isJolly(v), color = sea ? SEA : jolly ? JOLLY : AIR;
     // Lit models, drawn after the weather volumes so they stay visible through cloud and radar.
     const [kind, rel] = sea ? vesselKind(v) : aircraftKind(v), size = SIZE * rel;
     const icon = new THREE.Mesh(GEO[kind], new THREE.MeshLambertMaterial({ color, transparent: true }));
@@ -631,10 +633,12 @@ function moveTraffic(full = true, dt = 0) {
     const hit = (pos, list) => (corridorHot && inCorridor(pos.la, pos.lo)) || list.some((ar) => (sea ? ar.kind === 'notmar' : ar.kind === 'notam' && pos.altFt >= (ar.floor_ft || 0) && pos.altFt <= (ar.ceil_ft ?? Infinity))
       && ar.rings.some((r) => inRing(pos.la, pos.lo, r)));
     let state = hit(here, live) ? 2 : 0;
+    const cleared = !sea && isJolly(v); // rescue helicopters work inside the areas: never an alert
     // A straight-line forecast is only meaningful a short way ahead: three hours for a ship, twenty minutes for an aircraft.
     if (!state && hasTrack && toT0 != null && toT0 > 0 && toT0 <= (sea ? 180 : 20)) {
       if (hit(at(toT0), areas.filter((ar) => (!ar.from || Date.parse(ar.from) <= t0ms) && (!ar.to || Date.parse(ar.to) >= t0ms)))) state = 1;
     }
+    if (cleared) state = 0;
     if (state !== m.state || (state && !m.tag)) {
       if (m.tag) { trafficGroup.remove(m.tag); m.tag.material.map.dispose(); m.tag.material.dispose(); m.tag = null; }
       m.state = state; m.inside = state === 2;
@@ -643,7 +647,7 @@ function moveTraffic(full = true, dt = 0) {
       if (state) {
         m.tag = label(`${v.name || v.id}${sea ? '' : ' · ' + Math.round(here.altFt / 100) * 100 + ' ft'} · ${Math.round(kt)} kt${state === 1 ? ' · in the area at T-0' : ''}`, here.p, { color: state === 2 ? '#ffe11a' : '#ff8a8a', size: 10 });
         trafficGroup.add(m.tag);
-      } else { const c = sea ? SEA : AIR; m.icon.material.color.set(c); m.track.material.color.set(c); }
+      } else { const c = sea ? SEA : cleared ? JOLLY : AIR; m.icon.material.color.set(c); m.track.material.color.set(c); }
     }
     if (m.tag) m.tag.position.copy(here.p);
   }

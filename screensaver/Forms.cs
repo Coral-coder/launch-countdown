@@ -33,30 +33,40 @@ namespace LaunchCountdownSaver
 #endif
     }
 
+    /// <summary>
+    /// The display window. It runs three ways: full-screen as the screensaver (one per monitor), as an
+    /// ordinary resizable window (the app), and as the little preview inside Screen Saver Settings.
+    /// </summary>
     internal sealed class SaverForm : Form
     {
-        private readonly bool primary, preview; private readonly IntPtr previewParent;
+        private readonly bool primary, preview, app; private readonly IntPtr previewParent;
         private readonly Timer frame = new Timer { Interval = 15 };
         private readonly GLView gl; private readonly VideoHost video;
         private Bitmap back; private Layout lay = new Layout();
-        private int index, lastVersion = -1; private long lastSecond; private DateTime slideStart = DateTime.UtcNow, lastBuild, toastUntil;
-        private Slide current = Slide.Count; private bool paused, dark, help, force = true; private string toast;
+        private int index, lastVersion = -1; private long lastSecond; private DateTime slideStart = DateTime.UtcNow, lastBuild, toastUntil, lastMouse = DateTime.MinValue;
+        private Slide current = Slide.Count; private Slide? pinned; private bool paused, dark, help, force = true, barShown, cursorShown = true, dragging, full; private string toast;
+        private Point mouseAt, dragAt; private Rectangle windowed; private DateTime scrubArmed = DateTime.MinValue;
 
+        /// <summary>The screensaver, covering one monitor.</summary>
         public SaverForm(Rectangle bounds, bool primary)
         {
             this.primary = primary;
             FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; Bounds = bounds;
-            ShowInTaskbar = false; TopMost = true; KeyPreview = true;
+            ShowInTaskbar = false; TopMost = true;
             Init();
-            if (primary)
-            {
-                gl = new GLView { Visible = false, Enabled = false };
-                Controls.Add(gl);
-                video = VideoHost.Create(this);
-            }
+            if (primary) { gl = new GLView { Visible = false, Enabled = false }; Controls.Add(gl); video = VideoHost.Create(this); }
             else index = 3; // other monitors run the same show, a few slides ahead
-            KeyDown += OnKey;
             if (primary) Shown += (o, e) => { Activate(); Focus(); };
+        }
+
+        /// <summary>The app: an ordinary window that stays on the tab you pick.</summary>
+        public SaverForm()
+        {
+            app = primary = true; paused = true; pinned = Slide.Count;
+            Text = "Launch Countdown"; StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(1440, 810); MinimumSize = new Size(900, 560);
+            try { Icon = SystemIcons.Application; } catch { }
+            Init();
+            gl = new GLView { Visible = false, Enabled = false }; Controls.Add(gl); video = VideoHost.Create(this);
         }
 
         /// <summary>The preview: a child of the little monitor in Screen Saver Settings.</summary>
@@ -76,11 +86,16 @@ namespace LaunchCountdownSaver
 
         private void Init()
         {
-            BackColor = Color.Black;
+            BackColor = Color.Black; KeyPreview = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
             // one bad frame (a source returning something odd) must not take the display down
             frame.Tick += (o, e) => { try { Tick(); } catch { force = true; } };
             frame.Start();
+            if (preview) return;
+            KeyDown += OnKey;
+            Resize += (o, e) => force = true;
+            MouseMove += OnMouseMove; MouseDown += OnMouseDown; MouseUp += (o, e) => dragging = false; MouseWheel += OnWheel;
+            MouseDoubleClick += (o, e) => { if (gl != null && lay.View3D.Contains(e.Location)) gl.Scene.ResetView(); };
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
@@ -94,6 +109,7 @@ namespace LaunchCountdownSaver
 
         private bool Has3D { get { return gl != null && !gl.Failed; } }
         private bool HasVideo { get { return video != null && !video.Failed && Settings.Video; } }
+        private List<Slide> Slides() { return Settings.SlideList(HasVideo); }
 
         private void Tick()
         {
@@ -102,31 +118,37 @@ namespace LaunchCountdownSaver
             var now = DateTime.UtcNow; var l = Store.Current;
             double t = l != null && l.Net.HasValue ? (now - l.Net.Value).TotalSeconds : double.NaN;
             bool terminal = !preview && Settings.TerminalLayout && l != null && l.Precise && t >= -3600 && t <= 900;
-            var slides = Settings.SlideList(HasVideo);
+            var slides = Slides();
             if (!paused && !terminal && (now - slideStart).TotalSeconds >= Settings.SecondsPerTab) { index++; slideStart = now; }
             index = ((index % slides.Count) + slides.Count) % slides.Count;
-            var slide = preview ? Slide.Count : terminal ? Slide.Terminal : slides[index];
+            // a tab you picked stays until the slideshow is switched back on
+            var slide = preview ? Slide.Count : pinned.HasValue ? pinned.Value : terminal ? Slide.Terminal : slides[index];
+
+            // the bar and the pointer: always there in the app, in the screensaver only while the mouse is in use
+            bool bar = !preview && (app || (now - lastMouse).TotalSeconds < 6);
+            if (!app && !preview && cursorShown != bar) { try { if (bar) Cursor.Show(); else Cursor.Hide(); } catch { } cursorShown = bar; }
 
             bool flying = t >= 0 && t <= Flight.End;
-            if (force || slide != current || now.Ticks / TimeSpan.TicksPerSecond != lastSecond || Store.Version != lastVersion || (flying && (now - lastBuild).TotalMilliseconds > 200))
+            if (force || slide != current || bar != barShown || now.Ticks / TimeSpan.TicksPerSecond != lastSecond || Store.Version != lastVersion || (flying && (now - lastBuild).TotalMilliseconds > 200))
             {
-                current = slide; lastSecond = now.Ticks / TimeSpan.TicksPerSecond; lastVersion = Store.Version; lastBuild = now; force = false;
-                Build(slide, slides.Count, l);
+                current = slide; barShown = bar; lastSecond = now.Ticks / TimeSpan.TicksPerSecond; lastVersion = Store.Version; lastBuild = now; force = false;
+                Build(slide, slides, l);
                 Invalidate();
             }
             else if (lay.Clock.Width > 1) Invalidate(Rectangle.Ceiling(RectangleF.Inflate(lay.Clock, 4, 4)));
             if (gl != null && gl.Visible) gl.Render();
         }
 
-        private void Build(Slide slide, int count, Launch l)
+        private void Build(Slide slide, List<Slide> slides, Launch l)
         {
             int w = ClientSize.Width, h = ClientSize.Height;
             if (back == null || back.Width != w || back.Height != h) { if (back != null) back.Dispose(); back = new Bitmap(w, h, PixelFormat.Format32bppPArgb); }
+            var tabs = new List<Slide>(slides); tabs.Add(Slide.Terminal);
             using (var g = Graphics.FromImage(back))
-            using (var p = new Painter(g, w, h) { Scene = gl == null ? null : gl.Scene, View3DAvailable = Has3D, VideoAvailable = HasVideo })
+            using (var p = new Painter(g, w, h) { Scene = gl == null ? null : gl.Scene, View3DAvailable = Has3D, VideoAvailable = HasVideo, Bar = barShown, App = app, Running = !paused, Full = full, Tabs = tabs })
             {
-                p.Draw(slide, index, count);
-                p.Banner(l, paused, DateTime.UtcNow < toastUntil ? toast : null, help);
+                p.Draw(slide, Math.Max(0, slides.IndexOf(slide)), slides.Count);
+                p.Banner(l, paused && !app && !pinned.HasValue, DateTime.UtcNow < toastUntil ? toast : null, help);
                 lay = p.Out;
             }
             if (gl != null)
@@ -178,29 +200,81 @@ namespace LaunchCountdownSaver
         /// <summary>Bring the display back after GoDark, for the launch window.</summary>
         public void Wake() { dark = false; force = true; }
 
-        // ---------------------------------------------------------------- keyboard (the mouse is ignored)
+        // ---------------------------------------------------------------- mouse
+        // Moving the mouse never closes the screensaver: it brings up the bar so tabs and controls can be clicked.
+
+        private void OnMouseMove(object sender, MouseEventArgs e)
+        {
+            if (Math.Abs(e.X - mouseAt.X) + Math.Abs(e.Y - mouseAt.Y) < 3) return;
+            mouseAt = e.Location; lastMouse = DateTime.UtcNow;
+            if (dragging && gl != null) { gl.Scene.Drag(e.X - dragAt.X, e.Y - dragAt.Y); dragAt = e.Location; }
+        }
+
+        private void OnMouseDown(object sender, MouseEventArgs e)
+        {
+            lastMouse = DateTime.UtcNow;
+            for (int i = lay.Hits.Count - 1; i >= 0; i--)
+                if (lay.Hits[i].Key.Contains(e.Location)) { Do(lay.Hits[i].Value, false); return; }
+            if (gl != null && lay.View3D.Contains(e.Location)) { dragging = true; dragAt = e.Location; } // drag turns the 3D view, the wheel zooms, a double click lets it go
+        }
+
+        private void OnWheel(object sender, MouseEventArgs e)
+        {
+            lastMouse = DateTime.UtcNow;
+            if (gl != null && lay.View3D.Contains(e.Location)) gl.Scene.Wheel(e.Delta);
+        }
+
+        // ---------------------------------------------------------------- actions, from a key or a click
 
         private void Say(string text) { toast = text; toastUntil = DateTime.UtcNow.AddSeconds(4); force = true; }
         private static string OnOff(bool v) { return v ? "on" : "off"; }
 
-        private void OnKey(object sender, KeyEventArgs e)
+        private void Go(int to)
         {
-            var l = Store.Current; var slides = Settings.SlideList(HasVideo);
-            e.Handled = e.SuppressKeyPress = true;
-            switch (e.KeyCode)
+            var slides = Slides();
+            index = ((to % slides.Count) + slides.Count) % slides.Count; slideStart = DateTime.UtcNow;
+            if (paused || pinned.HasValue) pinned = slides[index];
+        }
+
+        private void SetFull(bool on)
+        {
+            if (!app || on == full) return;
+            full = on;
+            if (on) { windowed = Bounds; FormBorderStyle = FormBorderStyle.None; WindowState = FormWindowState.Normal; Bounds = Screen.FromControl(this).Bounds; }
+            else { FormBorderStyle = FormBorderStyle.Sizable; Bounds = windowed; }
+        }
+
+        private void Do(string action, bool shift)
+        {
+            var l = Store.Current; var slides = Slides();
+            if (action.StartsWith("tab:"))
             {
-                case Keys.Escape: case Keys.Space: Close(); return;
-                case Keys.F1: case Keys.K: help = !help; force = true; return;
-                case Keys.H: Count.ToggleHold(l); Say(Count.Holding(l) ? "HOLD — press H to resume, T to enter a new T-0" : "Count resumed"); break;
-                case Keys.S: if (e.Shift) { Count.Scrub(l); Say("SCRUBBED — press T to enter a new T-0, R to reset"); } else Say("Press Shift+S to scrub"); break;
-                case Keys.R: Count.Reset(l); Say("Count reset to the published T-0"); break;
-                case Keys.T: AskT0(l); break;
-                case Keys.Right: case Keys.PageDown: index++; slideStart = DateTime.UtcNow; break;
-                case Keys.Left: case Keys.PageUp: index--; slideStart = DateTime.UtcNow; break;
-                case Keys.P: paused = !paused; slideStart = DateTime.UtcNow; Say(paused ? "Slideshow paused" : "Slideshow running"); break;
-                case Keys.Add: case Keys.Oemplus: Settings.SecondsPerTab = Math.Min(600, Settings.SecondsPerTab + 5); Say(Settings.SecondsPerTab + " seconds per slide"); break;
-                case Keys.Subtract: case Keys.OemMinus: Settings.SecondsPerTab = Math.Max(5, Settings.SecondsPerTab - 5); Say(Settings.SecondsPerTab + " seconds per slide"); break;
-                case Keys.L:
+                // stay on this tab until the slideshow is switched on again
+                var s = (Slide)Enum.Parse(typeof(Slide), action.Substring(4));
+                pinned = s; paused = true; if (slides.Contains(s)) index = slides.IndexOf(s);
+                force = true; return;
+            }
+            switch (action)
+            {
+                case "exit": Close(); return;
+                case "help": help = !help; break;
+                case "hold": Count.ToggleHold(l); Say(Count.Holding(l) ? "HOLD — press H to resume, T to enter a new T-0" : "Count resumed"); break;
+                case "scrub":
+                    // a scrub needs a deliberate second step: Shift+S, or a second click within a few seconds
+                    if (shift || (DateTime.UtcNow - scrubArmed).TotalSeconds < 5) { Count.Scrub(l); Say("SCRUBBED — T or Set T-0 enters a new T-0, R or Reset clears it"); }
+                    else { scrubArmed = DateTime.UtcNow; Say("Press Shift+S, or click Scrub again, to scrub"); }
+                    break;
+                case "reset": Count.Reset(l); Say("Count reset to the published T-0"); break;
+                case "t0": AskT0(l); break;
+                case "next": Go(index + 1); break;
+                case "prev": Go(index - 1); break;
+                case "slideshow":
+                    paused = !paused; slideStart = DateTime.UtcNow;
+                    if (paused) pinned = current; else pinned = null;
+                    Say(paused ? "Slideshow off — staying on this tab" : "Slideshow on, " + Settings.SecondsPerTab + " seconds per slide"); break;
+                case "faster": Settings.SecondsPerTab = Math.Min(600, Settings.SecondsPerTab + 5); Say(Settings.SecondsPerTab + " seconds per slide"); break;
+                case "slower": Settings.SecondsPerTab = Math.Max(5, Settings.SecondsPerTab - 5); Say(Settings.SecondsPerTab + " seconds per slide"); break;
+                case "launch":
                 {
                     var all = Store.Launches.Where(x => x.Net.HasValue && x.Net.Value > DateTime.UtcNow.AddMinutes(-20)).ToList();
                     if (all.Count == 0) break;
@@ -209,43 +283,73 @@ namespace LaunchCountdownSaver
                     Say("Following " + all[i].Name + (i == 0 ? " (next launch)" : ""));
                     break;
                 }
-                case Keys.C:
+                case "theme":
                 {
                     int i = (Array.FindIndex(Theme.All, x => x == Theme.Cur) + 1) % Theme.All.Length;
                     Settings.Theme = Theme.All[i].Name; Say("Theme: " + Settings.Theme); break;
                 }
-                case Keys.V:
+                case "settings":
+                    if (!app) { try { Cursor.Show(); } catch { } TopMost = false; }
+                    using (var d = new ConfigForm()) d.ShowDialog(this);
+                    if (!app) TopMost = true;
+                    Settings.Load(); Store.Refresh(); break;
+                case "full": SetFull(!full); break;
+                case "view":
                 {
                     var names = Enum.GetNames(typeof(Scene3D.Mode)); int i = (Array.IndexOf(names, Settings.View) + 1) % names.Length;
                     Settings.View = names[i]; Say("3D view: " + names[i]); break;
                 }
-                case Keys.X: Settings.VerticalScale = Settings.VerticalScale >= 10 ? 1 : Settings.VerticalScale == 1 ? 2 : Settings.VerticalScale == 2 ? 5 : 10; Say("Vertical scale " + Settings.VerticalScale + "×"); break;
-                case Keys.W: Settings.Wind = !Settings.Wind; Say("Wind arrows and labels " + OnOff(Settings.Wind)); break;
-                case Keys.A: Settings.Aircraft = !Settings.Aircraft; Say("Aircraft " + OnOff(Settings.Aircraft)); break;
-                case Keys.B: Settings.Vessels = !Settings.Vessels; Say("Vessels " + OnOff(Settings.Vessels)); break;
-                case Keys.N: Settings.Hazards = !Settings.Hazards; Say("NOTAM and NOTMAR areas " + OnOff(Settings.Hazards)); break;
-                case Keys.O: Settings.Clouds = !Settings.Clouds; Say("Cloud volume " + OnOff(Settings.Clouds)); break;
-                case Keys.D: Settings.RadarVolume = !Settings.RadarVolume; Say("Radar volume " + OnOff(Settings.RadarVolume)); break;
-                case Keys.G: Settings.Telemetry = !Settings.Telemetry; Say("Telemetry " + OnOff(Settings.Telemetry)); break;
-                case Keys.Y: Settings.MapKey = !Settings.MapKey; Say("Key " + OnOff(Settings.MapKey)); break;
-                case Keys.M: Settings.CloudTime = Settings.CloudTime == "t0" ? "now" : "t0"; Store.Refresh(); Say("Cloud and wind fields for " + (Settings.CloudTime == "t0" ? "launch time" : "now")); break;
-                case Keys.I: Settings.Video = !Settings.Video; Say("Live video " + OnOff(Settings.Video)); break;
-                case Keys.E: Settings.TerminalLayout = !Settings.TerminalLayout; Say("Terminal-count layout " + OnOff(Settings.TerminalLayout)); break;
-                default:
-                    if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9 && e.KeyCode - Keys.D1 < slides.Count) { index = e.KeyCode - Keys.D1; slideStart = DateTime.UtcNow; break; }
-                    e.Handled = e.SuppressKeyPress = false; return;
+                case "scale": Settings.VerticalScale = Settings.VerticalScale >= 10 ? 1 : Settings.VerticalScale == 1 ? 2 : Settings.VerticalScale == 2 ? 5 : 10; Say("Vertical scale " + Settings.VerticalScale + "×"); break;
+                case "wind": Settings.Wind = !Settings.Wind; Say("Wind arrows and labels " + OnOff(Settings.Wind)); break;
+                case "aircraft": Settings.Aircraft = !Settings.Aircraft; Say("Aircraft " + OnOff(Settings.Aircraft)); break;
+                case "vessels": Settings.Vessels = !Settings.Vessels; Say("Vessels " + OnOff(Settings.Vessels)); break;
+                case "hazards": Settings.Hazards = !Settings.Hazards; Say("NOTAM and NOTMAR areas " + OnOff(Settings.Hazards)); break;
+                case "clouds": Settings.Clouds = !Settings.Clouds; Say("Cloud volume " + OnOff(Settings.Clouds)); break;
+                case "radar": Settings.RadarVolume = !Settings.RadarVolume; Store.Refresh(); Say("Radar volume " + OnOff(Settings.RadarVolume)); break;
+                case "telemetry": Settings.Telemetry = !Settings.Telemetry; Say("Telemetry " + OnOff(Settings.Telemetry)); break;
+                case "key": Settings.MapKey = !Settings.MapKey; Say("Key " + OnOff(Settings.MapKey)); break;
+                case "fields": Settings.CloudTime = Settings.CloudTime == "t0" ? "now" : "t0"; Store.Refresh(); Say("Cloud and wind fields for " + (Settings.CloudTime == "t0" ? "launch time" : "now")); break;
+                case "winds": Settings.UpperSource = Winds.NextSource(Settings.UpperSource); Say("Upper winds: " + Winds.SourceName(Settings.UpperSource)); break;
+                case "video": Settings.Video = !Settings.Video; Say("Live video " + OnOff(Settings.Video)); break;
+                case "terminal": Settings.TerminalLayout = !Settings.TerminalLayout; Say("Terminal-count layout " + OnOff(Settings.TerminalLayout)); break;
+                default: return;
             }
             Settings.Save();
             force = true;
         }
 
+        private void OnKey(object sender, KeyEventArgs e)
+        {
+            e.Handled = e.SuppressKeyPress = true;
+            string a = null;
+            switch (e.KeyCode)
+            {
+                // only Escape or Space ends the screensaver; in the app Escape leaves full screen and Space toggles the slideshow
+                case Keys.Escape: if (app) { SetFull(false); return; } a = "exit"; break;
+                case Keys.Space: a = app ? "slideshow" : "exit"; break;
+                case Keys.F11: a = "full"; break;
+                case Keys.F1: case Keys.K: a = "help"; break;
+                case Keys.H: a = "hold"; break; case Keys.S: a = "scrub"; break; case Keys.R: a = "reset"; break; case Keys.T: a = "t0"; break;
+                case Keys.Right: case Keys.PageDown: a = "next"; break; case Keys.Left: case Keys.PageUp: a = "prev"; break;
+                case Keys.P: a = "slideshow"; break; case Keys.Add: case Keys.Oemplus: a = "faster"; break; case Keys.Subtract: case Keys.OemMinus: a = "slower"; break;
+                case Keys.L: a = "launch"; break; case Keys.C: a = "theme"; break; case Keys.V: a = "view"; break; case Keys.X: a = "scale"; break;
+                case Keys.W: a = "wind"; break; case Keys.A: a = "aircraft"; break; case Keys.B: a = "vessels"; break; case Keys.N: a = "hazards"; break;
+                case Keys.O: a = "clouds"; break; case Keys.D: a = "radar"; break; case Keys.G: a = "telemetry"; break; case Keys.Y: a = "key"; break;
+                case Keys.M: a = "fields"; break; case Keys.U: a = "winds"; break; case Keys.I: a = "video"; break; case Keys.E: a = "terminal"; break;
+                default:
+                    if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9 && e.KeyCode - Keys.D1 < Slides().Count) { pinned = paused ? (Slide?)Slides()[e.KeyCode - Keys.D1] : null; index = e.KeyCode - Keys.D1; slideStart = DateTime.UtcNow; force = true; return; }
+                    e.Handled = e.SuppressKeyPress = false; return;
+            }
+            Do(a, e.Shift);
+        }
+
         private void AskT0(Launch l)
         {
             if (l == null || !l.Net.HasValue) return;
-            try { Cursor.Show(); } catch { }
+            if (!app) { try { Cursor.Show(); } catch { } }
             using (var d = new T0Dialog(l))
                 if (d.ShowDialog(this) == DialogResult.OK) { Count.SetT0(l, d.Value); Say("T-0 set to " + d.Value.ToString("HH:mm:ss") + " UTC — kept until the source publishes a new time"); }
-            try { Cursor.Hide(); } catch { }
+            cursorShown = true; lastMouse = DateTime.UtcNow;
         }
     }
 

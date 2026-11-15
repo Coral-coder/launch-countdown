@@ -17,8 +17,9 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          Rename-Item out/LaunchCountdown.exe LaunchCountdown.scr
-          if (Test-Path out/LaunchCountdown.exe.config) { Rename-Item out/LaunchCountdown.exe.config LaunchCountdown.scr.config }
+          # the same program under two names: .scr is the screensaver, .exe opens the windowed app
+          Copy-Item out/LaunchCountdown.exe out/LaunchCountdown.scr
+          if (Test-Path out/LaunchCountdown.exe.config) { Copy-Item out/LaunchCountdown.exe.config out/LaunchCountdown.scr.config }
           Remove-Item out/*.pdb, out/*.xml -ErrorAction SilentlyContinue
           Copy-Item screensaver/INSTALL.txt out/
           Get-ChildItem out -Recurse | Select-Object FullName, Length

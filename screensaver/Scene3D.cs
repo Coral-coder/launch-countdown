@@ -19,11 +19,17 @@ namespace LaunchCountdownSaver
         public int Aircraft, Vessels, Inside, Inbound, Notams, Notmars;
 
         private const double D2R = Math.PI / 180, TrackCapKm = 25, TrafficKm = 220, StaleMin = 20, ModelSize = 0.014;
-        private static readonly Color Air = Color.FromArgb(180, 184, 188), Ship = Color.FromArgb(111, 227, 111), Notam = Color.FromArgb(255, 210, 31), Notmar = Color.FromArgb(255, 90, 54);
+        private static readonly Color Air = Color.FromArgb(180, 184, 188), Ship = Color.FromArgb(111, 227, 111), Jolly = Color.FromArgb(60, 220, 90), Notam = Color.FromArgb(255, 210, 31), Notmar = Color.FromArgb(255, 90, 54);
 
         private readonly Stopwatch clock = Stopwatch.StartNew();
         private int mapTex, radarTex; private MapImage mapSrc, radarSrc; private Clouds cloudSrc; private int[] cloudTex, volTex; private RadarVolume volSrc;
-        private double last, camAz = 215, dist = 105, tx, ty, tz, ex, ey, ez;
+        private double last, camAz = 215, dist = 105, tx, ty, tz, ex, ey, ez, elOff, zoom = 1;
+        private DateTime held = DateTime.MinValue;
+
+        /// <summary>Turn the view by hand. It stays where you leave it for a minute, then drifts on.</summary>
+        public void Drag(int dx, int dy) { camAz -= dx * 0.3; elOff = Math.Max(-18, Math.Min(70, elOff + dy * 0.2)); held = DateTime.UtcNow.AddSeconds(60); }
+        public void Wheel(int delta) { zoom = Math.Max(0.15, Math.Min(8, zoom * Math.Pow(0.88, delta / 120.0))); }
+        public void ResetView() { elOff = 0; zoom = 1; held = DateTime.MinValue; }
         private double[] mvp; private int W, H, vs = 1; private Launch l;
         private readonly Dictionary<string, double[]> shown = new Dictionary<string, double[]>();
 
@@ -85,6 +91,7 @@ namespace LaunchCountdownSaver
 
         private void Camera(double? t, bool flying, double dt)
         {
+            bool hold = DateTime.UtcNow < held;
             double wantDist, el, hx = Math.Sin(l.Heading * D2R), hz = -Math.Cos(l.Heading * D2R), gx, gy, gz;
             if (View == Mode.Chase && flying)
             {
@@ -93,19 +100,20 @@ namespace LaunchCountdownSaver
                 FlightPos(t.Value, out gx, out gy, out gz);
                 wantDist = 14 + 42 * s.V + 0.35 * s.Alt; el = 12;
                 double want = l.Heading + 118 + 12 * Math.Sin(t.Value / 25);
-                camAz += (((want - camAz) % 360 + 540) % 360 - 180) * Math.Min(1, dt * 1.5);
+                if (!hold) camAz += (((want - camAz) % 360 + 540) % 360 - 180) * Math.Min(1, dt * 1.5);
             }
             else if (t.HasValue && t > Flight.End && t < 900)
             {
-                FlightPos(260, out gx, out gy, out gz); gy = 70; wantDist = 620; el = 24; camAz += dt * 1.5;
+                FlightPos(260, out gx, out gy, out gz); gy = 70; wantDist = 620; el = 24; if (!hold) camAz += dt * 1.5;
             }
             else if (View == Mode.Orbit)
             {
-                gx = hx * 18; gy = 5; gz = hz * 18; wantDist = 105; el = 20; camAz += dt * 2.5;
+                gx = hx * 18; gy = 5; gz = hz * 18; wantDist = 105; el = 20; if (!hold) camAz += dt * 2.5;
             }
-            else { gx = hx * 6; gy = 4; gz = hz * 6; wantDist = 55; el = 16; camAz += dt * 2.0; }
+            else { gx = hx * 6; gy = 4; gz = hz * 6; wantDist = 55; el = 16; if (!hold) camAz += dt * 2.0; }
 
-            double k = Math.Min(1, dt * 1.2);
+            el = Math.Max(2, Math.Min(88, el + elOff)); wantDist *= zoom;
+            double k = Math.Min(1, dt * (zoom != 1 ? 6 : 1.2));
             if (last < 0.5 || dt <= 0) k = 1;
             dist += (wantDist - dist) * k; tx += (gx - tx) * Math.Min(1, k * 2.5); ty += (gy - ty) * Math.Min(1, k * 2.5); tz += (gz - tz) * Math.Min(1, k * 2.5);
             if (View == Mode.Chase && flying) { tx = gx; ty = gy; tz = gz; }
@@ -532,7 +540,7 @@ namespace LaunchCountdownSaver
             if (Settings.Aircraft) planes.AddRange(Store.Planes);
             if (Settings.Vessels) planes.AddRange(Store.Vessels);
             double? toT0 = t.HasValue ? -t.Value / 60 : (double?)null; // minutes until T-0
-            bool corridorHot = toT0.HasValue && toT0 <= 120 && toT0 >= -15, forecast = toT0.HasValue && toT0 > 0 && toT0 <= 60;
+            bool corridorHot = toT0.HasValue && toT0 <= 120 && toT0 >= -15;
             var t0 = l.Net ?? DateTime.UtcNow;
             bool flash = ((int)(now * 4) & 1) == 0;
             Aircraft = Vessels = Inside = Inbound = 0;
@@ -559,15 +567,18 @@ namespace LaunchCountdownSaver
                 else shown[v.Id] = new[] { x, y, z };
                 seen.Add(v.Id);
 
+                // a straight-line forecast only means something a short way ahead: three hours for a ship, twenty minutes for an aircraft
+                bool forecast = toT0.HasValue && toT0 > 0 && toT0 <= (v.Sea ? 180 : 20), cleared = Flight.IsJolly(v);
                 int state = 0;
-                if (InArea(live, la, lo, altFt, DateTime.UtcNow) || (corridorHot && Flight.InCorridor(l, la, lo))) state = 2;
+                if (cleared) state = 0;
+                else if (InArea(live, la, lo, altFt, DateTime.UtcNow) || (corridorHot && Flight.InCorridor(l, la, lo))) state = 2;
                 else if (forecast)
                 {
                     double fla, flo; Flight.Destination(la, lo, v.Track, kmPerMin * toT0.Value, out fla, out flo);
                     if (Flight.InCorridor(l, fla, flo) || InArea(Store.Areas, fla, flo, Math.Max(0, altFt + v.Fpm * toT0.Value), t0)) state = 1;
                 }
                 if (v.Sea) Vessels++; else Aircraft++; if (state == 2) Inside++; else if (state == 1) Inbound++;
-                Color c = state == 2 ? (flash ? Color.FromArgb(255, 40, 40) : Color.FromArgb(255, 220, 30)) : state == 1 ? (flash ? Color.FromArgb(255, 40, 40) : Color.FromArgb(110, 20, 20))   : v.Sea ? Ship : Air;
+                Color c = state == 2 ? (flash ? Color.FromArgb(255, 40, 40) : Color.FromArgb(255, 220, 30)) : state == 1 ? (flash ? Color.FromArgb(255, 40, 40) : Color.FromArgb(110, 20, 20))   : v.Sea ? Ship : cleared ? Jolly : Air;
 
                 string kind = v.Sea ? Flight.VesselKind(v) : Flight.AircraftKind(v);
                 double camD = Math.Sqrt((x - ex) * (x - ex) + (y - ey) * (y - ey) + (z - ez) * (z - ez));

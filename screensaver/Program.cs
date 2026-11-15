@@ -24,13 +24,13 @@ namespace LaunchCountdownSaver
         public const string DefaultUrl = "https://coral-coder.github.io/launch-countdown/";
         public const string DefaultStream = "https://video.ibm.com/embed/23615375?autoplay=true&volume=0";
 
-        public static string Url = DefaultUrl, SiteIds = "12,27", Theme = "Mission Control", Slides = "", View = "Orbit", CloudTime = "t0", AisKey = "", Stream = DefaultStream;
+        public static string Url = DefaultUrl, SiteIds = "12,27", Theme = "Mission Control", Slides = "", View = "Orbit", CloudTime = "t0", AisKey = "", Stream = DefaultStream, UpperSource = "auto";
         public static int SecondsPerTab = 20, DisplayOffMinutes = 30, VerticalScale = 1;
         public static bool WakeForLaunch = true, TerminalLayout = true, Video = true, Clouds = true, RadarVolume = true, Aircraft = true, Vessels = true,
             Hazards = true, Wind = false, MapKey = true, Telemetry = true;
 
         private static readonly string[] Bools = { "WakeForLaunch", "TerminalLayout", "Video", "Clouds", "RadarVolume", "Aircraft", "Vessels", "Hazards", "Wind", "MapKey", "Telemetry" };
-        private static readonly string[] Strings = { "Url", "SiteIds", "Theme", "Slides", "View", "CloudTime", "AisKey", "Stream" };
+        private static readonly string[] Strings = { "Url", "SiteIds", "Theme", "Slides", "View", "CloudTime", "AisKey", "Stream", "UpperSource" };
         private static readonly string[] Ints = { "SecondsPerTab", "DisplayOffMinutes", "VerticalScale" };
 
         public static void Load()
@@ -249,7 +249,10 @@ namespace LaunchCountdownSaver
             Settings.Load();
 
             // Arguments arrive as "/s", "/c", "/c:1234" or "/p 1234"; no argument means "configure".
-            var arg = args.Length > 0 ? args[0].ToLowerInvariant() : "/c";
+            // The same program is shipped twice: LaunchCountdown.scr (started by Windows with an argument, or
+            // with none to mean "configure") and LaunchCountdown.exe, which opens the app when double-clicked.
+            bool scr = Application.ExecutablePath.EndsWith(".scr", StringComparison.OrdinalIgnoreCase);
+            var arg = args.Length > 0 ? args[0].ToLowerInvariant() : scr ? "/c" : "/app";
             if (arg.StartsWith("/agent"))
             {
                 bool first;
@@ -262,6 +265,7 @@ namespace LaunchCountdownSaver
                 using (new System.Threading.Mutex(true, SaverMutex, out first))
                     if (first) Application.Run(new SaverContext());
             }
+            else if (arg.StartsWith("/app")) { Store.Start(false); Application.Run(new SaverForm()); }
             else if (arg.StartsWith("/p"))
             {
                 long h;
@@ -296,7 +300,8 @@ namespace LaunchCountdownSaver
         public AgentContext()
         {
             var menu = new ContextMenuStrip();
-            menu.Items.Add("Show launch display now", null, (o, e) => Program.Start("/s"));
+            menu.Items.Add("Open Launch Countdown", null, (o, e) => Program.Start("/app"));
+            menu.Items.Add("Show full-screen display now", null, (o, e) => Program.Start("/s"));
             menu.Items.Add("Settings…", null, (o, e) => Program.Start("/c"));
             menu.Items.Add("Exit", null, (o, e) => { tray.Visible = false; ExitThread(); });
             tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "Launch Countdown", ContextMenuStrip = menu, Visible = true };

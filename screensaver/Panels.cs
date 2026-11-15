@@ -16,6 +16,8 @@ namespace LaunchCountdownSaver
     internal sealed class Layout
     {
         public RectangleF Clock, View3D, Video; public float ClockSize; public bool ClockCentered = true;
+        /// <summary>What the mouse can click: a rectangle and the action it stands for.</summary>
+        public readonly List<KeyValuePair<RectangleF, string>> Hits = new List<KeyValuePair<RectangleF, string>>();
     }
 
     internal sealed partial class Painter : IDisposable
@@ -26,6 +28,8 @@ namespace LaunchCountdownSaver
         public readonly Layout Out = new Layout();
         /// <summary>Numbers from the 3D view for the telemetry column.</summary>
         public Scene3D Scene; public bool VideoAvailable, View3DAvailable = true;
+        /// <summary>The tab bar: shown all the time in the app, and in the screensaver while the mouse is moving.</summary>
+        public bool Bar, App, Running, Full; public List<Slide> Tabs;
 
         public Painter(Graphics graphics, int width, int height)
         {
@@ -182,8 +186,11 @@ namespace LaunchCountdownSaver
                 Text(th.Marking, W / 2, 4 * u, 13, Color.White, true, false, 0); Text(th.Marking, W / 2, H - mh + 4 * u, 13, Color.White, true, false, 0);
                 top = mh; bottom = H - mh;
             }
+            float barTop = top;
+            if (Bar) top += 80 * u;
             if (l == null)
             {
+                if (Bar) TabBar(null, slide, barTop);
                 Text(Up("Launch Countdown"), W / 2, H * 0.42f, 44, th.Ink, true, false, 0);
                 Text(Store.LaunchNote.Length > 0 ? Store.LaunchNote : "no upcoming launches at the selected sites", W / 2, H * 0.5f, 20, th.Muted, false, false, 0);
                 return;
@@ -211,6 +218,7 @@ namespace LaunchCountdownSaver
                 case Slide.Terminal: Terminal(l, r); break;
             }
             Footer(bottom, slideIndex, slideCount);
+            if (Bar) TabBar(l, slide, barTop);
         }
 
         private void Header(Launch l, Slide slide, float top, float h)
@@ -240,6 +248,41 @@ namespace LaunchCountdownSaver
             }
         }
 
+        public static string Short(Slide s)
+        {
+            switch (s)
+            {
+                case Slide.Count: return "Count"; case Slide.Corridor: return "3D"; case Slide.Alerts: return "NWS"; case Slide.Sea: return "Sea + space"; case Slide.Raw: return "Data";
+                default: return s.ToString();
+            }
+        }
+
+        /// <summary>The controls and the tabs, as two rows across the top. Every button is also a key.</summary>
+        private void TabBar(Launch l, Slide active, float y0)
+        {
+            float m = 28 * u, h = 32 * u, x = m, y = y0 + 6 * u, gap = 6 * u;
+            using (var b = new SolidBrush(th.Bg)) g.FillRectangle(b, 0, y0, W, 80 * u);
+            Func<string, string, bool, Color?, float> button = (label, action, on, tint) =>
+            {
+                float w = g.MeasureString(Up(label), F(13, true)).Width + 18 * u; var r = new RectangleF(x, y, w, h);
+                using (var p = Round(r, Math.Min(th.Radius, 6))) using (var b = new SolidBrush(on ? (tint ?? th.Accent) : th.Panel)) using (var pen = new Pen(tint ?? th.Line, Math.Max(1, u))) { g.FillPath(b, p); g.DrawPath(pen, p); }
+                var fill = on ? (tint ?? th.Accent) : th.Panel;
+                Text(Up(label), x + w / 2, y + 7 * u, 13, on ? (fill.GetBrightness() > 0.6 ? Color.Black : Color.White) : th.Ink, true, false, 0);
+                Out.Hits.Add(new KeyValuePair<RectangleF, string>(r, action)); x += w + gap; return w;
+            };
+            bool holding = l != null && Count.Holding(l), scrubbed = l != null && Count.Scrubbed(l);
+            button(holding ? "Resume" : "Hold", "hold", holding, th.Warn); button("Scrub", "scrub", scrubbed, th.Bad); button("Set T-0", "t0", false, null); button("Reset", "reset", false, null);
+            x += 14 * u;
+            button(Running ? "Slideshow on" : "Slideshow off", "slideshow", Running, null); button("−", "slower", false, null);
+            x += Text(Settings.SecondsPerTab + " s", x, y + 7 * u, 13, th.Ink2, false, true) + gap; button("+", "faster", false, null);
+            x += 14 * u;
+            button("Next launch", "launch", false, null); button("Theme", "theme", false, null); button("Settings", "settings", false, null);
+            button(Full ? "Window" : "Full screen", "full", false, null);
+            if (!App) button("Exit", "exit", false, null);
+            x = m; y = y0 + 44 * u;
+            foreach (var s in Tabs ?? new List<Slide>()) button(Short(s), "tab:" + s, s == active, null);
+        }
+
         /// <summary>Things laid over any slide: the hold or scrub state, a message after a key press, the key list.</summary>
         public void Banner(Launch l, bool paused, string toast, bool help)
         {
@@ -260,17 +303,17 @@ namespace LaunchCountdownSaver
             }
             if (paused) Text("SLIDESHOW PAUSED", W - 28 * u, H - 58 * u, 13, th.Warn, true, false, 1);
             if (!help) return;
-            var r = new RectangleF(W / 2 - 430 * u, H / 2 - 330 * u, 860 * u, 660 * u);
+            var r = new RectangleF(W / 2 - 450 * u, H / 2 - 380 * u, 900 * u, 760 * u);
             using (var b = new SolidBrush(Color.FromArgb(170, 0, 0, 0))) g.FillRectangle(b, 0, 0, W, H);
-            var c2 = Card(r, "Keys · the mouse is ignored");
+            var c2 = Card(r, "Keys · moving the mouse brings up the tabs and buttons; it never exits");
             string[][] keys =
             {
-                new[] { "Esc  Space", "exit" }, new[] { "H", "hold / resume (T-0 moves by the length of the hold)" }, new[] { "Shift+S", "scrub" }, new[] { "T", "enter a new T-0" },
+                new[] { "Esc  Space", App ? "leave full screen / slideshow on or off" : "exit" }, new[] { "Mouse", "click tabs and buttons · drag and wheel in the 3D view" }, new[] { "H", "hold / resume (T-0 moves by the length of the hold)" }, new[] { "Shift+S", "scrub" }, new[] { "T", "enter a new T-0" },
                 new[] { "R", "reset to the published T-0" }, new[] { "←  →", "previous / next slide" }, new[] { "1 – 9", "jump to a slide" }, new[] { "P", "pause the slideshow" },
                 new[] { "+  −", "seconds per slide" }, new[] { "L", "follow the next launch in the list" }, new[] { "C", "theme" }, new[] { "E", "terminal-count layout on / off" },
                 new[] { "I", "live video on / off" }, new[] { "V", "3D view" }, new[] { "X", "3D vertical scale" }, new[] { "O  D", "cloud volume / radar volume" },
                 new[] { "A  B  N", "aircraft / vessels / NOTAM and NOTMAR areas" }, new[] { "W", "wind arrows and labels" }, new[] { "G  Y", "telemetry / key" },
-                new[] { "M", "cloud and wind fields for launch time or now" }, new[] { "F1  K", "this list" },
+                new[] { "M", "cloud and wind fields for launch time or now" }, new[] { "U", "upper-wind source: automatic, profiler, balloon, model" }, new[] { "F1  K", "this list" }, new[] { "F11", "full screen (app)" },
             };
             float ky = c2.Y, lh = (c2.Height) / keys.Length;
             foreach (var k in keys) { Text(k[0], c2.X, ky, 17, th.Accent, true, true); Text(k[1], c2.X + 190 * u, ky, 17, th.Ink); ky += lh; }
@@ -372,20 +415,21 @@ namespace LaunchCountdownSaver
             var view = new RectangleF(r.X, r.Y, r.Width - side - gap, r.Height);
             if (View3DAvailable) Out.View3D = view; else MapPanel(l, view, 260);
             if (side <= 0) return;
-            float keyH = Settings.MapKey ? (Settings.Telemetry ? 250 * u : r.Height) : 0;
+            float keyH = Settings.MapKey ? (Settings.Telemetry ? 268 * u : r.Height) : 0;
             if (Settings.Telemetry) Readout(l, new RectangleF(view.Right + gap, r.Y, side, r.Height - keyH - (keyH > 0 ? gap : 0)));
             if (Settings.MapKey) Key(new RectangleF(view.Right + gap, r.Bottom - keyH, side, keyH));
         }
 
         private void Key(RectangleF r)
         {
-            var c = Card(r, "Key"); float y = c.Y, lh = Math.Min(27 * u, c.Height / 7);
+            var c = Card(r, "Key"); float y = c.Y, lh = Math.Min(27 * u, c.Height / 8);
             Action<Color, string> row = (col, s) => { using (var b = new SolidBrush(col)) g.FillRectangle(b, c.X, y + 7 * u, 20 * u, 4 * u); Text(s, c.X + 32 * u, y, 14, th.Ink2, false, false, -1, c.Width - 32 * u); y += lh; };
             row(th.Track, "Nominal ascent and its corridor");
             row(Color.FromArgb(180, 184, 188), "Aircraft at true height · line to the surface");
             row(Color.FromArgb(180, 184, 188), "Track: tick at 5 minutes, X at 10");
             row(Color.FromArgb(255, 220, 30), "Flashing red/yellow: inside an area now");
             row(Color.FromArgb(255, 40, 40), "Flashing red: forecast inside at T-0");
+            row(Color.FromArgb(60, 220, 90), "Green helicopter: JOLLY rescue, cleared in");
             row(Color.FromArgb(255, 210, 31), "NOTAM airspace"); row(Color.FromArgb(255, 90, 54), "NOTMAR sea area");
         }
 
@@ -511,8 +555,8 @@ namespace LaunchCountdownSaver
                 double age = unix - v.T; if (v.Ground || age > 1200) continue;
                 double kmMin = v.Kt * 1.852 / 60, la, lo; Flight.Destination(v.Lat, v.Lon, v.Track, kmMin * age / 60, out la, out lo);
                 var p = pt(la, lo); if (!r.Contains(p)) continue;
-                bool alert = (hot && Flight.InCorridor(l, la, lo)) || Store.Areas.Any(a => (!a.To.HasValue || a.To.Value > now) && (!a.From.HasValue || (a.From.Value - now).TotalHours < 2) && a.Rings.Any(q => Flight.InRing(la, lo, q)));
-                var col = alert ? th.Bad : Color.FromArgb(200, 204, 208);
+                bool cleared = Flight.IsJolly(v), alert = !cleared && ((hot && Flight.InCorridor(l, la, lo)) || Store.Areas.Any(a => (!a.To.HasValue || a.To.Value > now) && (!a.From.HasValue || (a.From.Value - now).TotalHours < 2) && a.Rings.Any(q => Flight.InRing(la, lo, q))));
+                var col = alert ? th.Bad : cleared ? Color.FromArgb(60, 220, 90) : Color.FromArgb(200, 204, 208);
                 float hx = (float)Math.Sin(v.Track * Math.PI / 180), hy = -(float)Math.Cos(v.Track * Math.PI / 180), s = (alert ? 9 : 6) * u;
                 double horizon = kmMin > 0.05 ? Math.Min(10, 25 / kmMin) : 0;
                 using (var pen = new Pen(Color.FromArgb(150, col), Math.Max(1, u))) g.DrawLine(pen, p.X, p.Y, p.X + hx * (float)(kmMin * horizon) * k, p.Y + hy * (float)(kmMin * horizon) * k);
